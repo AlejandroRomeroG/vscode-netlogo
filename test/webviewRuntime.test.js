@@ -420,23 +420,27 @@ test("Code tab uses the simple editable NetLogo source surface", () => {
     .find(block => block.includes("--content-height")) ?? "";
 
   assert.match(source, /id="codeHighlight"/);
+  assert.match(source, /id="codeLineNumbers" class="code-line-numbers" aria-hidden="true"/);
   assert.match(source, /id="codeEditorSurface" class="highlight-editor netlogo-editor" contenteditable="true"/);
   assert.match(source, /id="codeInput" class="source-buffer" spellcheck="false" wrap="off" aria-hidden="true"/);
-  assert.doesNotMatch(source, /id="codeLineNumbers" class="line-gutter"/);
   assert.doesNotMatch(source, /-webkit-text-fill-color: transparent/);
   assert.match(source, /class="code-editor"/);
   assert.match(source, /function renderCodeHighlight\(\)/);
+  assert.match(source, /function renderCodeLineNumbers\(\)/);
   assert.match(source, /function appendHighlightedNetLogoLine\(parent, line\)/);
   assert.match(source, /function classifyNetLogoToken\(token\)/);
   assert.match(source, /netLogoKeywords/);
   assert.match(source, /netLogoPrimitives/);
   assert.match(source, /function syncCodeHighlightScroll\(\)/);
   assert.match(source, /codeEditorSurface\.addEventListener\("scroll", syncCodeHighlightScroll\)/);
+  assert.match(source, /codeLineNumbers\.scrollTop = codeEditorSurface\.scrollTop/);
   assert.match(source, /setInputValue\(inputs\.code, state\.code\)/);
   assert.match(source, /codeEditorSurface\.focus\(\)/);
   assert.match(source, /\.code-highlight\s*\{[\s\S]*?display: none;/);
+  assert.match(source, /\.code-line-numbers\s*\{[\s\S]*?pointer-events: none;/);
   assert.match(source, /\.code-editor\s*\{[\s\S]*?display: grid;[\s\S]*?grid-template-rows: minmax\(0, 1fr\);/);
   assert.match(codeSurfaceBlock, /height: var\(--content-height/);
+  assert.match(codeSurfaceBlock, /padding-left: calc\(var\(--code-gutter-width\) \+ 16px\)/);
   assert.match(source, /codeEditorSurface\.style\.height = contentHeight \+ "px"/);
   assert.match(source, /function renderHighlightedEditable\(target, source, renderer, preserveSelection\)/);
   assert.match(source, /function syncHighlightedEditor\(section, editor, input\)/);
@@ -448,14 +452,15 @@ test("Code tab uses the simple editable NetLogo source surface", () => {
   assert.doesNotMatch(source, /function insertTextAreaText\(input, text\)/);
 });
 
-test("Code and Info editors avoid synchronized line-number gutters", () => {
+test("Code editor uses a visual line-number gutter without adding one to Info", () => {
   const source = fs.readFileSync(path.join(root, "src", "netlogoEditor.ts"), "utf8");
 
   assert.doesNotMatch(source, /\.editor-with-gutter\s*\{/);
   assert.doesNotMatch(source, /\.line-gutter\s*\{/);
-  assert.doesNotMatch(source, /codeLineNumbers/);
+  assert.match(source, /const codeLineNumbers = document\.getElementById\("codeLineNumbers"\)/);
+  assert.match(source, /function renderCodeLineNumbers\(\)/);
   assert.doesNotMatch(source, /infoLineNumbers/);
-  assert.doesNotMatch(source, /renderLineNumbers/);
+  assert.doesNotMatch(source, /function renderLineNumbers/);
   assert.doesNotMatch(source, /measureLineNumbers/);
   assert.doesNotMatch(source, /syncLineNumbers/);
   assert.match(source, /codeEditorSurface\.addEventListener\("input"/);

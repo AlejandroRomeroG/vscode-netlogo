@@ -597,6 +597,7 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
     }
 
     .code-editor {
+      --code-gutter-width: 48px;
       position: relative;
       display: grid;
       grid-template-rows: minmax(0, 1fr);
@@ -606,13 +607,35 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
       overflow: hidden;
     }
 
+    .code-line-numbers {
+      position: absolute;
+      inset: 0 auto 0 0;
+      width: var(--code-gutter-width);
+      height: 100%;
+      margin: 0;
+      padding: 14px 10px 14px 6px;
+      border: 0;
+      border-right: 1px solid var(--vscode-editorLineNumber-border, var(--vscode-panel-border));
+      overflow: hidden;
+      color: var(--vscode-editorLineNumber-foreground);
+      background: var(--vscode-editor-background);
+      font-family: var(--vscode-editor-font-family, monospace);
+      font-size: var(--vscode-editor-font-size);
+      line-height: 1.45;
+      text-align: right;
+      white-space: pre;
+      user-select: none;
+      pointer-events: none;
+      z-index: 1;
+    }
+
     .code-highlight {
       position: absolute;
       inset: 0;
       width: 100%;
       height: 100%;
       margin: 0;
-      padding: 14px 16px;
+      padding: 14px 16px 14px calc(var(--code-gutter-width) + 16px);
       border: 0;
       font-family: var(--vscode-editor-font-family, monospace);
       font-size: var(--vscode-editor-font-size);
@@ -632,6 +655,7 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
     #codeEditorSurface {
       height: var(--content-height, calc(100vh - 108px));
       min-height: var(--content-height, 240px);
+      padding-left: calc(var(--code-gutter-width) + 16px);
       white-space: pre;
     }
 
@@ -1567,6 +1591,7 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
       </section>
       <section id="codePane" class="pane" role="tabpanel">
         <div class="code-editor">
+          <pre id="codeLineNumbers" class="code-line-numbers" aria-hidden="true"></pre>
           <pre id="codeHighlight" class="code-highlight" aria-hidden="true"></pre>
           <pre id="codeEditorSurface" class="highlight-editor netlogo-editor" contenteditable="true" role="textbox" aria-multiline="true" spellcheck="false"></pre>
           <textarea id="codeInput" class="source-buffer" spellcheck="false" wrap="off" aria-hidden="true"></textarea>
@@ -1756,6 +1781,7 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
     const layoutModeButton = document.getElementById("layoutModeButton");
     const codeEditor = document.querySelector(".code-editor");
     const codeEditorSurface = document.getElementById("codeEditorSurface");
+    const codeLineNumbers = document.getElementById("codeLineNumbers");
     const codeHighlight = document.getElementById("codeHighlight");
     const infoShell = document.querySelector(".info-shell");
     const infoToolbar = document.querySelector(".info-toolbar");
@@ -2580,7 +2606,17 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
     function renderCodeHighlight() {
       renderHighlightedEditable(codeEditorSurface, state.code, appendHighlightedNetLogo, true);
       renderHighlightedEditable(codeHighlight, state.code, appendHighlightedNetLogo, false);
+      renderCodeLineNumbers();
       syncCodeHighlightScroll();
+    }
+
+    function renderCodeLineNumbers() {
+      const lineCount = String(state.code ?? "").split("\\n").length;
+      const digits = String(lineCount).length;
+      if (codeEditor) {
+        codeEditor.style.setProperty("--code-gutter-width", Math.max(48, digits * 9 + 26) + "px");
+      }
+      codeLineNumbers.textContent = Array.from({ length: lineCount }, (_, index) => String(index + 1)).join("\\n");
     }
 
     function renderHighlightedEditable(target, source, renderer, preserveSelection) {
@@ -2864,6 +2900,7 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
     function syncCodeHighlightScroll() {
       codeHighlight.scrollTop = codeEditorSurface.scrollTop;
       codeHighlight.scrollLeft = codeEditorSurface.scrollLeft;
+      codeLineNumbers.scrollTop = codeEditorSurface.scrollTop;
     }
 
     function clampNumber(value, min, max) {
