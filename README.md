@@ -1,4 +1,7 @@
-# NetLogo Tools for VS Code
+<h1>
+  <img src="resources/logo-hd.png" alt="NetLogo Tools logo" width="48" height="48" align="center">
+  NetLogo Tools for VS Code
+</h1>
 
 **NetLogo Tools** is an alpha-stage Visual Studio Code extension for opening, editing, and running NetLogo model files directly in VS Code.
 
