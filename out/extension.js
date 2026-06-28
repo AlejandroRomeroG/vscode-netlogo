@@ -502,7 +502,7 @@ function nativeNetLogoAppForResource(resource) {
         home: config.get("home", ""),
         autoDetect: config.get("autoDetect", true)
     });
-    return installation ? (0, netlogoInstallation_1.findNativeNetLogoApp)(installation.home) : undefined;
+    return installation ? (0, netlogoInstallation_1.findNativeNetLogoApp)(installation.home, { threeD: resource.fsPath.toLowerCase().endsWith(".nlogo3d") }) : undefined;
 }
 function openFileWithMacApp(appPath, filePath) {
     return new Promise((resolve, reject) => {

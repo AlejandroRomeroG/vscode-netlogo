@@ -103,17 +103,19 @@ function installationFromHome(home) {
         jvmArgs: buildJvmArgs(jarPath)
     };
 }
-function findNativeNetLogoApp(home) {
+function findNativeNetLogoApp(home, options = {}) {
     const normalizedHome = path.resolve(home);
     if (normalizedHome.endsWith(".app") && isDirectory(normalizedHome)) {
-        return normalizedHome;
+        if (!options.threeD || isNetLogo3DAppName(path.basename(normalizedHome))) {
+            return normalizedHome;
+        }
     }
     for (const directory of uniqueExistingDirectories([
         normalizedHome,
         path.dirname(normalizedHome),
         path.dirname(path.dirname(normalizedHome))
     ])) {
-        const app = findNetLogoAppInDirectory(directory);
+        const app = findNetLogoAppInDirectory(directory, options);
         if (app) {
             return app;
         }
@@ -284,11 +286,17 @@ function uniqueExistingDirectories(directories) {
     }
     return result;
 }
-function findNetLogoAppInDirectory(directory) {
-    return safeReadDir(directory)
+function findNetLogoAppInDirectory(directory, options) {
+    const apps = safeReadDir(directory)
         .filter(entry => entry.isDirectory() && entry.name.endsWith(".app") && /netlogo/i.test(entry.name))
-        .map(entry => path.join(directory, entry.name))
+        .map(entry => path.join(directory, entry.name));
+    const preferred = apps
+        .filter(app => options.threeD ? isNetLogo3DAppName(path.basename(app)) : !isNetLogo3DAppName(path.basename(app)))
         .sort((left, right) => right.localeCompare(left))[0];
+    return preferred ?? apps.sort((left, right) => right.localeCompare(left))[0];
+}
+function isNetLogo3DAppName(fileName) {
+    return /\b3d\b/i.test(fileName);
 }
 function isNetLogoJarName(fileName) {
     return /^(netlogo\.jar|NetLogo\.jar|netlogo-\d+(?:\.\d+)*(?:-[\w.]+)?\.jar)$/i.test(fileName);

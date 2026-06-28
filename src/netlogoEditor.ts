@@ -1524,6 +1524,8 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
         <div id="fileName" class="filename">NetLogo</div>
       </div>
       <div class="actions">
+        <button id="commandButton" type="button" title="Run NetLogo command">Command...</button>
+        <button id="openNativeButton" type="button" title="Open in native NetLogo">Open in NetLogo</button>
         <label class="speed-control" title="Forever speed">
           <span>Speed</span>
           <input id="speedSlider" type="range" min="-5" max="5" step="1" value="0" aria-label="Forever speed">
@@ -1531,8 +1533,6 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
         <span class="tick-counter" title="NetLogo ticks"><span>ticks</span><strong id="tickCount">-</strong></span>
         <button id="setupButton" type="button">Setup</button>
         <button id="goButton" type="button">Go once</button>
-        <button id="commandButton" type="button" title="Run NetLogo command">Command...</button>
-        <button id="openNativeButton" type="button" title="Open in native NetLogo">Open app</button>
         <button id="foreverButton" type="button">Forever</button>
         <span id="status" class="status">Ready</span>
       </div>

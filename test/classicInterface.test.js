@@ -219,6 +219,82 @@ test("parses 3D view bounds", () => {
   assert.equal(view.details.maxPzcor, 12);
 });
 
+test("moves external 3D views to the right of controls in the preview", () => {
+  const source = [
+    "GRAPHICS-WINDOW",
+    "0",
+    "0",
+    "245",
+    "248",
+    "-1",
+    "-1",
+    "7.0",
+    "1",
+    "10",
+    "1",
+    "1",
+    "1",
+    "0",
+    "1",
+    "1",
+    "1",
+    "-15",
+    "15",
+    "-15",
+    "15",
+    "-15",
+    "15",
+    "1",
+    "1",
+    "1",
+    "ticks",
+    "30.0",
+    "",
+    "BUTTON",
+    "70",
+    "41",
+    "148",
+    "74",
+    "NIL",
+    "setup",
+    "NIL",
+    "1",
+    "T",
+    "OBSERVER",
+    "NIL",
+    "NIL",
+    "NIL",
+    "NIL",
+    "1",
+    "",
+    "SLIDER",
+    "152",
+    "181",
+    "292",
+    "214",
+    "driver-y",
+    "driver-y",
+    "-11",
+    "11",
+    "0.0",
+    "1",
+    "1",
+    "NIL",
+    "HORIZONTAL"
+  ].join("\n");
+
+  const [rawView] = parseClassicWidgets(source);
+  assert.equal(rawView.x, 0);
+  assert.equal(rawView.y, 0);
+
+  const preview = parseInterfacePreview(source, "classic");
+  const [view] = preview.widgets;
+  assert.equal(view.kind, "view");
+  assert.equal(view.x, 316);
+  assert.equal(view.y, 0);
+  assert.equal(preview.bounds.width, 820);
+});
+
 test("parses 3D sample widget positions without reinterpreting classic bounds", () => {
   const source = [
     "GRAPHICS-WINDOW",

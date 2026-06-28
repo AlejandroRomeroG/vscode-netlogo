@@ -84,10 +84,12 @@ export function installationFromHome(home: string): NetLogoInstallation | undefi
   };
 }
 
-export function findNativeNetLogoApp(home: string): string | undefined {
+export function findNativeNetLogoApp(home: string, options: { readonly threeD?: boolean } = {}): string | undefined {
   const normalizedHome = path.resolve(home);
   if (normalizedHome.endsWith(".app") && isDirectory(normalizedHome)) {
-    return normalizedHome;
+    if (!options.threeD || isNetLogo3DAppName(path.basename(normalizedHome))) {
+      return normalizedHome;
+    }
   }
 
   for (const directory of uniqueExistingDirectories([
@@ -95,7 +97,7 @@ export function findNativeNetLogoApp(home: string): string | undefined {
     path.dirname(normalizedHome),
     path.dirname(path.dirname(normalizedHome))
   ])) {
-    const app = findNetLogoAppInDirectory(directory);
+    const app = findNetLogoAppInDirectory(directory, options);
     if (app) {
       return app;
     }
@@ -297,12 +299,18 @@ function uniqueExistingDirectories(directories: readonly string[]): readonly str
   return result;
 }
 
-function findNetLogoAppInDirectory(directory: string): string | undefined {
-  return safeReadDir(directory)
+function findNetLogoAppInDirectory(directory: string, options: { readonly threeD?: boolean }): string | undefined {
+  const apps = safeReadDir(directory)
     .filter(entry => entry.isDirectory() && entry.name.endsWith(".app") && /netlogo/i.test(entry.name))
-    .map(entry => path.join(directory, entry.name))
-    .sort((left, right) => right.localeCompare(left))
-    [0];
+    .map(entry => path.join(directory, entry.name));
+  const preferred = apps
+    .filter(app => options.threeD ? isNetLogo3DAppName(path.basename(app)) : !isNetLogo3DAppName(path.basename(app)))
+    .sort((left, right) => right.localeCompare(left))[0];
+  return preferred ?? apps.sort((left, right) => right.localeCompare(left))[0];
+}
+
+function isNetLogo3DAppName(fileName: string): boolean {
+  return /\b3d\b/i.test(fileName);
 }
 
 function isNetLogoJarName(fileName: string): boolean {

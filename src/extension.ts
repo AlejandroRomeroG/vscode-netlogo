@@ -679,7 +679,7 @@ function nativeNetLogoAppForResource(resource: vscode.Uri): string | undefined {
     home: config.get<string>("home", ""),
     autoDetect: config.get<boolean>("autoDetect", true)
   });
-  return installation ? findNativeNetLogoApp(installation.home) : undefined;
+  return installation ? findNativeNetLogoApp(installation.home, { threeD: resource.fsPath.toLowerCase().endsWith(".nlogo3d") }) : undefined;
 }
 
 function openFileWithMacApp(appPath: string, filePath: string): Promise<void> {

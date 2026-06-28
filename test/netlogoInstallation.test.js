@@ -70,14 +70,18 @@ test("finds the native NetLogo app near jar-based installations", () => {
   try {
     const home = path.join(tempDir, "NetLogo 6.4.0");
     const appBundle = path.join(home, "NetLogo 6.4.0.app");
+    const app3DBundle = path.join(home, "NetLogo 3D 6.4.0.app");
     fs.mkdirSync(path.join(home, "app"), { recursive: true });
     fs.mkdirSync(appBundle, { recursive: true });
+    fs.mkdirSync(app3DBundle, { recursive: true });
     fs.writeFileSync(path.join(home, "app", "netlogo-6.4.0.jar"), "");
 
     const installation = installationFromHome(home);
     assert.equal(installation.home, home);
     assert.equal(findNativeNetLogoApp(installation.home), appBundle);
     assert.equal(findNativeNetLogoApp(appBundle), appBundle);
+    assert.equal(findNativeNetLogoApp(installation.home, { threeD: true }), app3DBundle);
+    assert.equal(findNativeNetLogoApp(appBundle, { threeD: true }), app3DBundle);
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }

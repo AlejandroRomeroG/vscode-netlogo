@@ -77,7 +77,8 @@ const KnownClassicWidgetTypes = new Set([
 ]);
 
 export function parseInterfacePreview(source: string, format: NetLogoFormat): InterfacePreview {
-  const widgets = format === "xml" ? parseXmlWidgets(source) : parseClassicWidgets(source);
+  const parsedWidgets = format === "xml" ? parseXmlWidgets(source) : parseClassicWidgets(source);
+  const widgets = format === "xml" ? parsedWidgets : positionExternal3DViews(parsedWidgets);
   return {
     widgets,
     bounds: getBounds(widgets)
@@ -405,6 +406,33 @@ function parseClassicWidgetBlock(block: readonly string[], index: number): Inter
     default:
       return baseWidget(index, type, "generic", type, box, block);
   }
+}
+
+function positionExternal3DViews(widgets: readonly InterfaceWidget[]): readonly InterfaceWidget[] {
+  const controls = widgets.filter(widget => widget.kind !== "view");
+  if (controls.length === 0) {
+    return widgets;
+  }
+
+  const controlRight = Math.max(...controls.map(widget => widget.x + widget.width));
+  const nextViewX = Math.max(280, controlRight + 24);
+  return widgets.map(widget => {
+    if (!isExternal3DView(widget)) {
+      return widget;
+    }
+    return {
+      ...widget,
+      x: nextViewX
+    };
+  });
+}
+
+function isExternal3DView(widget: InterfaceWidget): boolean {
+  return widget.kind === "view"
+    && widget.x <= 20
+    && widget.y <= 20
+    && widget.details?.minPzcor !== undefined
+    && widget.details?.maxPzcor !== undefined;
 }
 
 function parseClassicViewDetails(block: readonly string[]): Record<string, string | number | boolean | readonly string[]> {

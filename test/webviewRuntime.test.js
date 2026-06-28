@@ -12,8 +12,13 @@ test("webview exposes a controllable forever run loop", () => {
   assert.match(source, /id="foreverButton"/);
   assert.match(source, /id="commandButton"/);
   assert.match(source, /id="openNativeButton"/);
+  assert.match(source, />Open in NetLogo<\/button>/);
   assert.match(source, /id="speedSlider"/);
   assert.match(source, /id="tickCount"/);
+  const topbarActions = source.match(/<div class="actions">[\s\S]*?<\/div>\s*<\/header>/)?.[0] ?? "";
+  assert.ok(topbarActions.indexOf('id="commandButton"') >= 0);
+  assert.ok(topbarActions.indexOf('id="openNativeButton"') > topbarActions.indexOf('id="commandButton"'));
+  assert.ok(topbarActions.indexOf('id="speedSlider"') > topbarActions.indexOf('id="openNativeButton"'));
   assert.match(source, /type: "prompt-command"/);
   assert.match(source, /readonly type: "open-native"/);
   assert.match(source, /executeCommand\("netlogo\.openInNetLogo", document\.uri\)/);

@@ -24,7 +24,8 @@ const KnownClassicWidgetTypes = new Set([
     "VIEW"
 ]);
 function parseInterfacePreview(source, format) {
-    const widgets = format === "xml" ? parseXmlWidgets(source) : parseClassicWidgets(source);
+    const parsedWidgets = format === "xml" ? parseXmlWidgets(source) : parseClassicWidgets(source);
+    const widgets = format === "xml" ? parsedWidgets : positionExternal3DViews(parsedWidgets);
     return {
         widgets,
         bounds: getBounds(widgets)
@@ -296,6 +297,30 @@ function parseClassicWidgetBlock(block, index) {
         default:
             return baseWidget(index, type, "generic", type, box, block);
     }
+}
+function positionExternal3DViews(widgets) {
+    const controls = widgets.filter(widget => widget.kind !== "view");
+    if (controls.length === 0) {
+        return widgets;
+    }
+    const controlRight = Math.max(...controls.map(widget => widget.x + widget.width));
+    const nextViewX = Math.max(280, controlRight + 24);
+    return widgets.map(widget => {
+        if (!isExternal3DView(widget)) {
+            return widget;
+        }
+        return {
+            ...widget,
+            x: nextViewX
+        };
+    });
+}
+function isExternal3DView(widget) {
+    return widget.kind === "view"
+        && widget.x <= 20
+        && widget.y <= 20
+        && widget.details?.minPzcor !== undefined
+        && widget.details?.maxPzcor !== undefined;
 }
 function parseClassicViewDetails(block) {
     const tickCounterIndex = findClassicViewTickCounterIndex(block);
