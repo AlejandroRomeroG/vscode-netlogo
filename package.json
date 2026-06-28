@@ -1,0 +1,207 @@
+{
+  "name": "vscode-netlogo",
+  "displayName": "NetLogo Tools (Alpha)",
+  "description": "Alpha extension for editing and running NetLogo models in VS Code.",
+  "version": "0.1.37",
+  "icon": "resources/icon.png",
+  "author": "Alejandro Romero González",
+  "license": "CC-BY-4.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/AlejandroRomeroG/vscode-netlogo.git"
+  },
+  "publisher": "local",
+  "private": true,
+  "preview": true,
+  "engines": {
+    "vscode": "^1.88.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Visualization",
+    "Other"
+  ],
+  "activationEvents": [
+    "onCustomEditor:netlogo.modelEditor",
+    "onLanguage:netlogo",
+    "onCommand:netlogo.openModelEditor",
+    "onCommand:netlogo.openInNetLogo",
+    "onCommand:netlogo.showOutput",
+    "onCommand:netlogo.configure",
+    "onCommand:netlogo.runSetup",
+    "onCommand:netlogo.runGoOnce",
+    "onCommand:netlogo.runCommand",
+    "onCommand:netlogo.clearCommandHistory"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "netlogo.openModelEditor",
+        "title": "NetLogo: Open Model Editor"
+      },
+      {
+        "command": "netlogo.openInNetLogo",
+        "title": "NetLogo: Open in NetLogo"
+      },
+      {
+        "command": "netlogo.showOutput",
+        "title": "NetLogo: Show Output"
+      },
+      {
+        "command": "netlogo.configure",
+        "title": "NetLogo: Configure NetLogo"
+      },
+      {
+        "command": "netlogo.runSetup",
+        "title": "NetLogo: Run setup"
+      },
+      {
+        "command": "netlogo.runGoOnce",
+        "title": "NetLogo: Run go once"
+      },
+      {
+        "command": "netlogo.runCommand",
+        "title": "NetLogo: Run command..."
+      },
+      {
+        "command": "netlogo.clearCommandHistory",
+        "title": "NetLogo: Clear Command History"
+      }
+    ],
+    "configuration": {
+      "title": "NetLogo",
+      "properties": {
+        "netlogo.javaPath": {
+          "type": "string",
+          "default": "java",
+          "description": "Java executable used to run NetLogo headless."
+        },
+        "netlogo.javacPath": {
+          "type": "string",
+          "default": "javac",
+          "description": "Javac executable used to compile the small NetLogo bridge."
+        },
+        "netlogo.jvmArgs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Additional JVM arguments used when launching NetLogo headless. Detected installations provide required NetLogo arguments automatically."
+        },
+        "netlogo.home": {
+          "type": "string",
+          "default": "",
+          "description": "NetLogo installation folder or app bundle. Used to infer the headless classpath when netlogo.classPath is not set."
+        },
+        "netlogo.autoDetect": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically look for a local NetLogo installation when netlogo.classPath and netlogo.home are not set."
+        },
+        "netlogo.verboseOutput": {
+          "type": "boolean",
+          "default": false,
+          "description": "Write detailed NetLogo bridge commands, reports, and export events to the NetLogo output channel."
+        },
+        "netlogo.commandTimeoutMs": {
+          "type": "number",
+          "default": 60000,
+          "minimum": 1000,
+          "description": "Maximum time in milliseconds to wait for a NetLogo bridge compile, command, report, view export, or plot export before stopping the session."
+        },
+        "netlogo.classPath": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Classpath entries for NetLogo headless, usually NetLogo.jar plus required library jars. Java wildcards such as /path/to/lib/* are allowed."
+        }
+      }
+    },
+    "customEditors": [
+      {
+        "viewType": "netlogo.modelEditor",
+        "displayName": "NetLogo Model Editor",
+        "selector": [
+          {
+            "filenamePattern": "*.nlogo"
+          },
+          {
+            "filenamePattern": "*.nlogox"
+          },
+          {
+            "filenamePattern": "*.nlogo3d"
+          }
+        ],
+        "priority": "default"
+      }
+    ],
+    "languages": [
+      {
+        "id": "netlogo",
+        "aliases": [
+          "NetLogo",
+          "netlogo"
+        ],
+        "extensions": [
+          ".nlogo",
+          ".nlogox",
+          ".nlogo3d"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "netlogo",
+        "scopeName": "source.netlogo",
+        "path": "./syntaxes/netlogo.tmLanguage.json"
+      }
+    ],
+    "menus": {
+      "explorer/context": [
+        {
+          "command": "netlogo.openModelEditor",
+          "when": "resourceExtname == .nlogo || resourceExtname == .nlogox || resourceExtname == .nlogo3d",
+          "group": "navigation"
+        },
+        {
+          "command": "netlogo.runSetup",
+          "when": "resourceExtname == .nlogo || resourceExtname == .nlogox || resourceExtname == .nlogo3d",
+          "group": "netlogo"
+        },
+        {
+          "command": "netlogo.runGoOnce",
+          "when": "resourceExtname == .nlogo || resourceExtname == .nlogox || resourceExtname == .nlogo3d",
+          "group": "netlogo"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "package:vsix": "npm run compile && vsce package",
+    "package:list": "npm run compile && vsce ls",
+    "test": "npm run compile && node --test test/*.test.js",
+    "test:e2e": "npm run compile && node test-e2e/run.js",
+    "watch": "tsc -watch -p ./",
+    "vscode:prepublish": "npm run compile"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.9",
+    "@types/vscode": "^1.88.0",
+    "@vscode/test-electron": "^2.3.10",
+    "@vscode/vsce": "^2.15.0",
+    "typescript": "^5.5.2"
+  },
+  "overrides": {
+    "cheerio": "1.0.0-rc.12"
+  },
+  "dependencies": {
+    "@types/three": "^0.185.0",
+    "three": "^0.185.0"
+  }
+}

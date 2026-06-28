@@ -1,0 +1,72 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "NetLogo",
+  "scopeName": "source.netlogo",
+  "patterns": [
+    {
+      "include": "#comments"
+    },
+    {
+      "include": "#strings"
+    },
+    {
+      "include": "#keywords"
+    },
+    {
+      "include": "#numbers"
+    }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.semicolon.netlogo",
+          "match": ";.*$"
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.netlogo",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.netlogo",
+              "match": "\\\\."
+            }
+          ]
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.netlogo",
+          "match": "\\b(if|ifelse|repeat|while|foreach|carefully|loop|stop|report|to|to-report|end|ask|let|set|create-turtles|create-links-with|hatch|sprout|die)\\b"
+        },
+        {
+          "name": "storage.type.netlogo",
+          "match": "\\b(globals|breed|breeds-own|turtles-own|patches-own|links-own|directed-link-breed|undirected-link-breed)\\b"
+        },
+        {
+          "name": "support.function.netlogo",
+          "match": "\\b(setup|go|clear-all|reset-ticks|tick|tick-advance|show|print|type|count|one-of|n-of|with|of|patch-here|neighbors|neighbors4|random|random-float|mean|sum|min|max|list|word|sentence|map|filter|reduce|sort|sort-by)\\b"
+        },
+        {
+          "name": "constant.language.netlogo",
+          "match": "\\b(true|false|nobody|self|myself|world-width|world-height|ticks)\\b"
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.netlogo",
+          "match": "[-+]?\\b\\d+(?:\\.\\d+)?(?:[eE][-+]?\\d+)?\\b"
+        }
+      ]
+    }
+  }
+}
