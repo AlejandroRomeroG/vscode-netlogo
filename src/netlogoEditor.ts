@@ -3883,9 +3883,9 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
       addThreeLights(scene, THREE);
 
       const bounds = viewState.bounds;
-      const spanX = Math.max(1, bounds.maxX - bounds.minX);
-      const spanY = Math.max(1, bounds.maxY - bounds.minY);
-      const spanZ = Math.max(1, bounds.maxZ - bounds.minZ);
+      const spanX = Math.max(1, bounds.maxX - bounds.minX + 1);
+      const spanY = Math.max(1, bounds.maxY - bounds.minY + 1);
+      const spanZ = Math.max(1, bounds.maxZ - bounds.minZ + 1);
       const span = Math.max(spanX, spanY, spanZ);
       const baseTarget = new THREE.Vector3(
         (bounds.minX + bounds.maxX) / 2,
@@ -4229,13 +4229,17 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
 
     function addThreeWorldBox(scene, THREE, bounds) {
       const theme = threeTheme();
-      const box = new THREE.Box3(
-        new THREE.Vector3(bounds.minX, bounds.minZ, bounds.minY),
-        new THREE.Vector3(bounds.maxX, bounds.maxZ, bounds.maxY)
-      );
+      const box = threeWorldEdgeBounds(THREE, bounds);
       const helper = new THREE.Box3Helper(box, 0x4d4658);
       helper.material.color.setHex(theme.box);
       scene.add(helper);
+    }
+
+    function threeWorldEdgeBounds(THREE, bounds) {
+      return new THREE.Box3(
+        new THREE.Vector3(bounds.minX - 0.5, bounds.minZ - 0.5, bounds.minY - 0.5),
+        new THREE.Vector3(bounds.maxX + 0.5, bounds.maxZ + 0.5, bounds.maxY + 0.5)
+      );
     }
 
     function addThreeLights(scene, THREE) {

@@ -253,7 +253,17 @@ test("webview mounts a local Three.js 3D view when runtime state is available", 
   assert.match(source, /document\.removeEventListener\("fullscreenchange", handleFullscreenChange\)/);
   assert.match(source, /targetX: baseTarget\.x/);
   assert.match(source, /controls\.targetX = start\.targetX \+ pan\.x/);
+  assert.match(source, /bounds\.maxX - bounds\.minX \+ 1/);
+  assert.match(source, /bounds\.maxY - bounds\.minY \+ 1/);
+  assert.match(source, /bounds\.maxZ - bounds\.minZ \+ 1/);
   assert.match(source, /function addThreeWorldBox\(scene, THREE, bounds\)/);
+  assert.match(source, /function threeWorldEdgeBounds\(THREE, bounds\)/);
+  assert.match(source, /bounds\.minX - 0\.5/);
+  assert.match(source, /bounds\.minY - 0\.5/);
+  assert.match(source, /bounds\.minZ - 0\.5/);
+  assert.match(source, /bounds\.maxX \+ 0\.5/);
+  assert.match(source, /bounds\.maxY \+ 0\.5/);
+  assert.match(source, /bounds\.maxZ \+ 0\.5/);
   assert.doesNotMatch(source, /GridHelper/);
   assert.doesNotMatch(source, /function addThreeAxes/);
   assert.match(source, /function addThreeLights\(scene, THREE\)/);
