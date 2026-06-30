@@ -504,9 +504,20 @@ function nativeNetLogoAppForResource(resource) {
     });
     return installation ? (0, netlogoInstallation_1.findNativeNetLogoApp)(installation.home, { threeD: resource.fsPath.toLowerCase().endsWith(".nlogo3d") }) : undefined;
 }
-function openFileWithMacApp(appPath, filePath) {
+const nativeNetLogoWarmupMs = 1500;
+async function openFileWithMacApp(appPath, filePath) {
+    try {
+        await runMacOpen(["-a", appPath]);
+        await sleep(nativeNetLogoWarmupMs);
+        await runMacOpen(["-a", appPath, filePath]);
+    }
+    catch {
+        await vscode.env.openExternal(vscode.Uri.file(filePath));
+    }
+}
+function runMacOpen(args) {
     return new Promise((resolve, reject) => {
-        const child = (0, child_process_1.spawn)("open", ["-a", appPath, filePath], {
+        const child = (0, child_process_1.spawn)("open", args, {
             stdio: "ignore",
             detached: true
         });
@@ -520,9 +531,10 @@ function openFileWithMacApp(appPath, filePath) {
             }
         });
         child.unref();
-    }).catch(async () => {
-        await vscode.env.openExternal(vscode.Uri.file(filePath));
     });
+}
+function sleep(milliseconds) {
+    return new Promise(resolve => setTimeout(resolve, milliseconds));
 }
 async function configureNetLogo() {
     const detected = (0, netlogoInstallation_1.detectNetLogoInstallations)();

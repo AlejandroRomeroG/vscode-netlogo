@@ -256,8 +256,15 @@ test("webview mounts a local Three.js 3D view when runtime state is available", 
   assert.match(source, /function addThreeWorldBox\(scene, THREE, bounds\)/);
   assert.doesNotMatch(source, /GridHelper/);
   assert.doesNotMatch(source, /function addThreeAxes/);
+  assert.match(source, /function addThreeLights\(scene, THREE\)/);
+  assert.match(source, /new THREE\.AmbientLight/);
+  assert.match(source, /new THREE\.DirectionalLight/);
   assert.match(source, /function addThreePatches\(scene, THREE, patches, pickables\)/);
-  assert.match(source, /new THREE\.MeshBasicMaterial/);
+  assert.match(source, /const groups = new Map\(\)/);
+  assert.match(source, /const material = new THREE\.MeshBasicMaterial\(\{ color: group\.color \}\)/);
+  assert.doesNotMatch(source, /mesh\.setColorAt/);
+  assert.match(source, /new THREE\.MeshLambertMaterial/);
+  assert.doesNotMatch(source, /opacity:\s*0\.88/);
   assert.match(source, /new THREE\.InstancedMesh/);
   assert.match(source, /const pickables = \[\]/);
   assert.match(source, /function addThreeTurtles\(scene, THREE, turtles, pickables\)/);

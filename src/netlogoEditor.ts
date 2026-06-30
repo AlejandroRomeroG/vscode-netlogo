@@ -3880,6 +3880,7 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
 
       const scene = new THREE.Scene();
       scene.background = new THREE.Color(threeTheme().background);
+      addThreeLights(scene, THREE);
 
       const bounds = viewState.bounds;
       const spanX = Math.max(1, bounds.maxX - bounds.minX);
@@ -4237,6 +4238,16 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
       scene.add(helper);
     }
 
+    function addThreeLights(scene, THREE) {
+      scene.add(new THREE.AmbientLight(0xffffff, 0.65));
+      const keyLight = new THREE.DirectionalLight(0xffffff, 0.85);
+      keyLight.position.set(0.45, 1.0, 0.75);
+      scene.add(keyLight);
+      const fillLight = new THREE.DirectionalLight(0xffffff, 0.25);
+      fillLight.position.set(-0.8, 0.35, -0.4);
+      scene.add(fillLight);
+    }
+
     function addThreeTurtles(scene, THREE, turtles, pickables) {
       if (!turtles.length) {
         return;
@@ -4257,7 +4268,7 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
 
       for (const group of groups.values()) {
         const geometry = turtleGeometryForKey(THREE, group.geometryKey);
-        const material = new THREE.MeshBasicMaterial({
+        const material = new THREE.MeshLambertMaterial({
           color: group.color,
           side: THREE.DoubleSide
         });
@@ -4315,29 +4326,29 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
         return;
       }
 
-      const geometry = new THREE.BoxGeometry(0.92, 0.92, 0.92);
-      const material = new THREE.MeshBasicMaterial({
-        vertexColors: true,
-        transparent: true,
-        opacity: 0.88
-      });
-      const mesh = new THREE.InstancedMesh(geometry, material, patches.length);
-      const matrix = new THREE.Matrix4();
-      const color = new THREE.Color();
-
-      patches.forEach((patch, index) => {
-        matrix.makeTranslation(Number(patch.x) || 0, Number(patch.z) || 0, Number(patch.y) || 0);
-        mesh.setMatrixAt(index, matrix);
-        color.setHex(threeColorHex(patch));
-        mesh.setColorAt(index, color);
-      });
-      mesh.instanceMatrix.needsUpdate = true;
-      if (mesh.instanceColor) {
-        mesh.instanceColor.needsUpdate = true;
+      const groups = new Map();
+      for (const patch of patches) {
+        const color = threeColorHex(patch);
+        const group = groups.get(color) ?? { color, items: [] };
+        group.items.push(patch);
+        groups.set(color, group);
       }
-      mesh.userData = { kind: "patch", items: patches };
-      scene.add(mesh);
-      pickables.push(mesh);
+
+      const matrix = new THREE.Matrix4();
+
+      for (const group of groups.values()) {
+        const geometry = new THREE.BoxGeometry(1, 1, 1);
+        const material = new THREE.MeshBasicMaterial({ color: group.color });
+        const mesh = new THREE.InstancedMesh(geometry, material, group.items.length);
+        group.items.forEach((patch, index) => {
+          matrix.makeTranslation(Number(patch.x) || 0, Number(patch.z) || 0, Number(patch.y) || 0);
+          mesh.setMatrixAt(index, matrix);
+        });
+        mesh.instanceMatrix.needsUpdate = true;
+        mesh.userData = { kind: "patch", items: group.items };
+        scene.add(mesh);
+        pickables.push(mesh);
+      }
     }
 
     function addThreeLinks(scene, THREE, links, turtles, pickables) {
@@ -4386,7 +4397,7 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
       direction.normalize();
       const position = end.clone().addScaledVector(direction, -Math.min(0.45, length * 0.22));
       const geometry = new THREE.ConeGeometry(0.16 * size, 0.42 * size, 10);
-      const material = new THREE.MeshBasicMaterial({ color, side: THREE.DoubleSide });
+      const material = new THREE.MeshLambertMaterial({ color, side: THREE.DoubleSide });
       const arrow = new THREE.Mesh(geometry, material);
       arrow.position.copy(position);
       arrow.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction);

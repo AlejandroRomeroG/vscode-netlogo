@@ -682,9 +682,21 @@ function nativeNetLogoAppForResource(resource: vscode.Uri): string | undefined {
   return installation ? findNativeNetLogoApp(installation.home, { threeD: resource.fsPath.toLowerCase().endsWith(".nlogo3d") }) : undefined;
 }
 
-function openFileWithMacApp(appPath: string, filePath: string): Promise<void> {
+const nativeNetLogoWarmupMs = 1500;
+
+async function openFileWithMacApp(appPath: string, filePath: string): Promise<void> {
+  try {
+    await runMacOpen(["-a", appPath]);
+    await sleep(nativeNetLogoWarmupMs);
+    await runMacOpen(["-a", appPath, filePath]);
+  } catch {
+    await vscode.env.openExternal(vscode.Uri.file(filePath));
+  }
+}
+
+function runMacOpen(args: readonly string[]): Promise<void> {
   return new Promise<void>((resolve, reject) => {
-    const child = spawn("open", ["-a", appPath, filePath], {
+    const child = spawn("open", args, {
       stdio: "ignore",
       detached: true
     });
@@ -697,9 +709,11 @@ function openFileWithMacApp(appPath: string, filePath: string): Promise<void> {
       }
     });
     child.unref();
-  }).catch(async () => {
-    await vscode.env.openExternal(vscode.Uri.file(filePath));
   });
+}
+
+function sleep(milliseconds: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, milliseconds));
 }
 
 async function configureNetLogo(): Promise<void> {

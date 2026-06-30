@@ -58,7 +58,9 @@ test("extension registers native NetLogo open command", () => {
   assert.match(source, /function openInNativeNetLogo\(resource\?: vscode\.Uri\)/);
   assert.match(source, /function nativeNetLogoAppForResource\(resource: vscode\.Uri\)/);
   assert.match(source, /findNativeNetLogoApp\(installation\.home, \{ threeD: resource\.fsPath\.toLowerCase\(\)\.endsWith\("\.nlogo3d"\) \}\)/);
-  assert.match(source, /spawn\("open", \["-a", appPath, filePath\]/);
+  assert.match(source, /await runMacOpen\(\["-a", appPath\]\)/);
+  assert.match(source, /await runMacOpen\(\["-a", appPath, filePath\]\)/);
+  assert.match(source, /spawn\("open", args/);
   assert.match(source, /vscode\.env\.openExternal\(uri\)/);
 });
 
