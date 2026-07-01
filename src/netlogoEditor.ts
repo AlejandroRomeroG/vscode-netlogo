@@ -472,18 +472,66 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
       flex: none;
     }
 
-    .speed-control {
-      display: flex;
+    .actions button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      height: 28px;
+      padding-top: 0;
+      padding-bottom: 0;
+    }
+
+    .run-controls {
+      display: inline-flex;
       align-items: center;
       gap: 6px;
-      min-width: 124px;
+    }
+
+    .speed-control {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 2px;
+      min-width: 112px;
       color: var(--vscode-descriptionForeground);
       font-size: 11px;
+      line-height: 1.1;
       user-select: none;
     }
 
+    .speed-label {
+      min-height: 12px;
+      color: var(--vscode-foreground);
+      font-size: 11px;
+      font-weight: 600;
+      text-align: center;
+      white-space: nowrap;
+    }
+
+    .speed-slider-wrap {
+      position: relative;
+      display: flex;
+      align-items: center;
+      width: 96px;
+    }
+
+    .speed-normal-mark {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      width: 1px;
+      height: 11px;
+      background: var(--vscode-descriptionForeground);
+      opacity: 0.85;
+      transform: translate(-50%, -50%);
+      pointer-events: none;
+    }
+
     .speed-control input {
-      width: 78px;
+      position: relative;
+      z-index: 1;
+      width: 96px;
       min-width: 0;
     }
 
@@ -520,6 +568,12 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
 
     button:hover {
       background: var(--vscode-button-hoverBackground);
+    }
+
+    #foreverButton {
+      width: 68px;
+      min-width: 68px;
+      text-align: center;
     }
 
     .tabs {
@@ -1397,9 +1451,26 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
     }
 
     .status {
+      display: inline-flex;
+      align-items: center;
+      width: 35ch;
+      min-width: 35ch;
+      min-height: 28px;
+      padding: 4px 8px;
+      overflow-x: auto;
+      overflow-y: hidden;
+      border: 1px solid var(--vscode-input-border, var(--vscode-panel-border));
+      border-radius: 4px;
       color: var(--vscode-descriptionForeground);
-      min-width: 64px;
-      text-align: right;
+      background: var(--vscode-editorWidget-background);
+      font-size: 11px;
+      scrollbar-width: thin;
+      text-align: left;
+      white-space: nowrap;
+    }
+
+    .status::-webkit-scrollbar {
+      height: 4px;
     }
 
     .runtime-banner {
@@ -1407,10 +1478,19 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
       align-items: center;
       gap: 8px;
       min-height: 34px;
-      padding: 5px 12px;
-      border-bottom: 1px solid var(--vscode-panel-border);
-      color: var(--vscode-editorWarning-foreground, var(--vscode-editor-foreground));
-      background: var(--vscode-editorWarning-background, var(--vscode-inputValidation-warningBackground, var(--vscode-editorWidget-background)));
+      padding: 6px 12px;
+      border-bottom: 1px solid rgba(86, 62, 24, 0.7);
+      color: #241a0a;
+      background: #e6c07a;
+      font-weight: 600;
+    }
+
+    #runtimeBannerText {
+      flex: 1;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
 
     .runtime-banner.hidden {
@@ -1541,17 +1621,22 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
         <div id="fileName" class="filename">NetLogo</div>
       </div>
       <div class="actions">
+        <span id="status" class="status">Ready</span>
         <button id="commandButton" type="button" title="Run NetLogo command">Command...</button>
         <button id="openNativeButton" type="button" title="Open in native NetLogo">Open in NetLogo</button>
         <label class="speed-control" title="Forever speed">
-          <span>Speed</span>
-          <input id="speedSlider" type="range" min="-5" max="5" step="1" value="0" aria-label="Forever speed">
+          <span id="speedLabel" class="speed-label">normal speed</span>
+          <span class="speed-slider-wrap">
+            <span class="speed-normal-mark" aria-hidden="true"></span>
+            <input id="speedSlider" type="range" min="-5" max="5" step="1" value="0" aria-label="Forever speed">
+          </span>
         </label>
-        <span class="tick-counter" title="NetLogo ticks"><span>ticks</span><strong id="tickCount">-</strong></span>
-        <button id="setupButton" type="button">Setup</button>
-        <button id="goButton" type="button">Go once</button>
-        <button id="foreverButton" type="button">Forever</button>
-        <span id="status" class="status">Ready</span>
+        <span class="run-controls">
+          <span class="tick-counter" title="NetLogo ticks"><span>ticks</span><strong id="tickCount">-</strong></span>
+          <button id="setupButton" type="button">Setup</button>
+          <button id="goButton" type="button">Go once</button>
+          <button id="foreverButton" type="button">Forever</button>
+        </span>
       </div>
     </header>
     <nav class="tabs" role="tablist" aria-label="NetLogo sections">
@@ -1789,6 +1874,7 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
     const commandButton = document.getElementById("commandButton");
     const openNativeButton = document.getElementById("openNativeButton");
     const foreverButton = document.getElementById("foreverButton");
+    const speedLabel = document.getElementById("speedLabel");
     const speedSlider = document.getElementById("speedSlider");
     const tickCount = document.getElementById("tickCount");
     const runtimeBanner = document.getElementById("runtimeBanner");
@@ -2949,8 +3035,27 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
     function updateSpeedControl() {
       speedSlider.value = String(state.runSpeed);
       const delay = runLoopDelayMs();
-      speedSlider.title = delay === 0 ? "Fastest" : delay + " ms";
-      speedSlider.setAttribute("aria-valuetext", delay === 0 ? "fastest" : delay + " milliseconds");
+      const label = runSpeedLabel();
+      speedLabel.textContent = label;
+      speedSlider.title = label + (delay === 0 ? "" : " · " + delay + " ms");
+      speedSlider.setAttribute("aria-valuetext", delay === 0 ? label : label + ", " + delay + " milliseconds");
+    }
+
+    function runSpeedLabel() {
+      const speed = clampNumber(Number(state.runSpeed), -5, 5);
+      if (speed <= -5) {
+        return "slowest";
+      }
+      if (speed < 0) {
+        return "slower";
+      }
+      if (speed === 0) {
+        return "normal speed";
+      }
+      if (speed >= 5) {
+        return "fastest";
+      }
+      return "faster";
     }
 
     function runLoopDelayMs() {
