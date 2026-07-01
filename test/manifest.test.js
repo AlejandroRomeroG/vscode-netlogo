@@ -45,10 +45,32 @@ test("webview starts in traditional NetLogo tab order", () => {
   assert.match(source, /activeTab:\s*validUiTab\(restoredUiState\.activeTab\)/);
 });
 
-test("model editor webviews reload instead of retaining stale HTML", () => {
+test("model editor webviews retain running state and rehydrate when needed", () => {
   const source = fs.readFileSync(path.join(root, "src", "netlogoEditor.ts"), "utf8");
 
-  assert.match(source, /retainContextWhenHidden:\s*false/);
+  assert.match(source, /supportsMultipleEditorsPerDocument:\s*true/);
+  assert.match(source, /retainContextWhenHidden:\s*true/);
+  assert.match(source, /workbench\.action\.keepEditor/);
+  assert.match(source, /webviewPanel\.onDidChangeViewState/);
+  assert.match(source, /event\.webviewPanel\.visible/);
+  assert.match(source, /viewStateSubscription\.dispose\(\)/);
+  assert.match(source, /message\.type === "ready"/);
+  assert.match(source, /vscode\.postMessage\(\{ type: "ready" \}\)/);
+});
+
+test("extension opens NetLogo model editor tabs as pinned editors", () => {
+  const source = fs.readFileSync(path.join(root, "src", "extension.ts"), "utf8");
+
+  assert.match(source, /vscode\.openWith", uri, NetLogoModelEditorProvider\.viewType, \{ preview: false \}/);
+  assert.match(source, /tabGroups\.onDidChangeTabs\(\(\) => keepActivePreviewTabWhenNetLogoEditorsAreOpen\(\)\)/);
+  assert.match(source, /function keepActivePreviewTabWhenNetLogoEditorsAreOpen\(\): void/);
+  assert.match(source, /activeTab\?\.isPreview/);
+  assert.match(source, /!hasOpenNetLogoModelEditorTab\(\)/);
+  assert.match(source, /workbench\.action\.keepEditor/);
+  assert.match(source, /function hasOpenNetLogoModelEditorTab\(\): boolean/);
+  assert.match(source, /function isNetLogoModelEditorTab\(tab: vscode\.Tab\): boolean/);
+  assert.match(source, /tab\.input instanceof vscode\.TabInputCustom/);
+  assert.match(source, /tab\.input\.viewType === NetLogoModelEditorProvider\.viewType/);
 });
 
 test("extension registers native NetLogo open command", () => {

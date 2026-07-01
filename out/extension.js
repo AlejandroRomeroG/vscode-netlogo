@@ -50,10 +50,10 @@ function activate(context) {
     const output = vscode.window.createOutputChannel("NetLogo");
     const runner = new runner_1.NetLogoRunner(context, output);
     const diagnostics = vscode.languages.createDiagnosticCollection("netlogo");
-    context.subscriptions.push(output, runner, diagnostics, vscode.languages.registerCompletionItemProvider({ language: "netlogo", scheme: "file" }, (0, netlogoCompletions_1.createNetLogoCompletionProvider)()), vscode.languages.registerDocumentSymbolProvider({ language: "netlogo", scheme: "file" }, createNetLogoDocumentSymbolProvider()), vscode.languages.registerHoverProvider({ language: "netlogo", scheme: "file" }, createNetLogoHoverProvider()), vscode.languages.registerDefinitionProvider({ language: "netlogo", scheme: "file" }, createNetLogoDefinitionProvider()), vscode.languages.registerReferenceProvider({ language: "netlogo", scheme: "file" }, createNetLogoReferenceProvider()), vscode.languages.registerDocumentHighlightProvider({ language: "netlogo", scheme: "file" }, createNetLogoDocumentHighlightProvider()), vscode.languages.registerRenameProvider({ language: "netlogo", scheme: "file" }, createNetLogoRenameProvider()), vscode.languages.registerCodeActionsProvider({ language: "netlogo", scheme: "file" }, createNetLogoCodeActionProvider(), { providedCodeActionKinds: [vscode.CodeActionKind.QuickFix] }), netlogoEditor_1.NetLogoModelEditorProvider.register(context, runner), vscode.workspace.onDidOpenTextDocument(document => updateNetLogoDiagnostics(document, diagnostics)), vscode.workspace.onDidChangeTextDocument(event => updateNetLogoDiagnostics(event.document, diagnostics)), vscode.workspace.onDidCloseTextDocument(document => diagnostics.delete(document.uri)), vscode.commands.registerCommand("netlogo.openModelEditor", async (resource) => {
+    context.subscriptions.push(output, runner, diagnostics, vscode.languages.registerCompletionItemProvider({ language: "netlogo", scheme: "file" }, (0, netlogoCompletions_1.createNetLogoCompletionProvider)()), vscode.languages.registerDocumentSymbolProvider({ language: "netlogo", scheme: "file" }, createNetLogoDocumentSymbolProvider()), vscode.languages.registerHoverProvider({ language: "netlogo", scheme: "file" }, createNetLogoHoverProvider()), vscode.languages.registerDefinitionProvider({ language: "netlogo", scheme: "file" }, createNetLogoDefinitionProvider()), vscode.languages.registerReferenceProvider({ language: "netlogo", scheme: "file" }, createNetLogoReferenceProvider()), vscode.languages.registerDocumentHighlightProvider({ language: "netlogo", scheme: "file" }, createNetLogoDocumentHighlightProvider()), vscode.languages.registerRenameProvider({ language: "netlogo", scheme: "file" }, createNetLogoRenameProvider()), vscode.languages.registerCodeActionsProvider({ language: "netlogo", scheme: "file" }, createNetLogoCodeActionProvider(), { providedCodeActionKinds: [vscode.CodeActionKind.QuickFix] }), netlogoEditor_1.NetLogoModelEditorProvider.register(context, runner), vscode.workspace.onDidOpenTextDocument(document => updateNetLogoDiagnostics(document, diagnostics)), vscode.workspace.onDidChangeTextDocument(event => updateNetLogoDiagnostics(event.document, diagnostics)), vscode.workspace.onDidCloseTextDocument(document => diagnostics.delete(document.uri)), vscode.window.tabGroups.onDidChangeTabs(() => keepActivePreviewTabWhenNetLogoEditorsAreOpen()), vscode.commands.registerCommand("netlogo.openModelEditor", async (resource) => {
         const uri = await resolveModelUri(resource);
         if (uri) {
-            await vscode.commands.executeCommand("vscode.openWith", uri, netlogoEditor_1.NetLogoModelEditorProvider.viewType);
+            await vscode.commands.executeCommand("vscode.openWith", uri, netlogoEditor_1.NetLogoModelEditorProvider.viewType, { preview: false });
         }
     }), vscode.commands.registerCommand("netlogo.openInNetLogo", async (resource) => {
         await openInNativeNetLogo(resource);
@@ -85,6 +85,7 @@ function activate(context) {
     for (const document of vscode.workspace.textDocuments) {
         updateNetLogoDiagnostics(document, diagnostics);
     }
+    keepActivePreviewTabWhenNetLogoEditorsAreOpen();
 }
 function deactivate() {
 }
@@ -109,6 +110,29 @@ async function resolveModelUri(resource) {
 function isNetLogoUri(uri) {
     const path = uri.fsPath.toLowerCase();
     return path.endsWith(".nlogo") || path.endsWith(".nlogox") || path.endsWith(".nlogo3d");
+}
+let keepingActivePreviewTab = false;
+function keepActivePreviewTabWhenNetLogoEditorsAreOpen() {
+    if (keepingActivePreviewTab) {
+        return;
+    }
+    const activeTab = vscode.window.tabGroups.activeTabGroup.activeTab;
+    if (!activeTab?.isPreview || isNetLogoModelEditorTab(activeTab) || !hasOpenNetLogoModelEditorTab()) {
+        return;
+    }
+    keepingActivePreviewTab = true;
+    void vscode.commands.executeCommand("workbench.action.keepEditor").then(() => {
+        keepingActivePreviewTab = false;
+    }, () => {
+        keepingActivePreviewTab = false;
+    });
+}
+function hasOpenNetLogoModelEditorTab() {
+    return vscode.window.tabGroups.all.some(group => group.tabs.some(isNetLogoModelEditorTab));
+}
+function isNetLogoModelEditorTab(tab) {
+    return tab.input instanceof vscode.TabInputCustom
+        && tab.input.viewType === netlogoEditor_1.NetLogoModelEditorProvider.viewType;
 }
 function updateNetLogoDiagnostics(document, collection) {
     if (!isNetLogoUri(document.uri)) {

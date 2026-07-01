@@ -44,9 +44,9 @@ const runner_1 = require("./runner");
 class NetLogoModelEditorProvider {
     static register(context, runner) {
         return vscode.window.registerCustomEditorProvider(NetLogoModelEditorProvider.viewType, new NetLogoModelEditorProvider(context, runner), {
-            supportsMultipleEditorsPerDocument: false,
+            supportsMultipleEditorsPerDocument: true,
             webviewOptions: {
-                retainContextWhenHidden: false
+                retainContextWhenHidden: true
             }
         });
     }
@@ -63,6 +63,7 @@ class NetLogoModelEditorProvider {
             ]
         };
         webviewPanel.webview.html = this.getHtml(webviewPanel.webview);
+        void vscode.commands.executeCommand("workbench.action.keepEditor");
         const updateWebview = () => {
             const model = (0, modelFormat_1.parseNetLogoModel)(document.getText(), document.fileName);
             const interfacePreview = (0, classicInterface_1.parseInterfacePreview)(model.interfaceSource, model.format);
@@ -83,10 +84,20 @@ class NetLogoModelEditorProvider {
                 updateWebview();
             }
         });
+        const viewStateSubscription = webviewPanel.onDidChangeViewState(event => {
+            if (event.webviewPanel.visible) {
+                updateWebview();
+            }
+        });
         webviewPanel.onDidDispose(() => {
             documentChangeSubscription.dispose();
+            viewStateSubscription.dispose();
         });
         webviewPanel.webview.onDidReceiveMessage(async (message) => {
+            if (message.type === "ready") {
+                updateWebview();
+                return;
+            }
             if (message.type === "update") {
                 await this.updateDocument(document, message.section, message.value);
                 return;
@@ -1490,6 +1501,7 @@ class NetLogoModelEditorProvider {
   </script>
   <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
+    vscode.postMessage({ type: "ready" });
     const restoredUiState = vscode.getState?.() ?? {};
     const knownWidgetTypes = new Set([
       "GRAPHICS-WINDOW",
@@ -1629,7 +1641,7 @@ class NetLogoModelEditorProvider {
       viewImageDataUri: null,
       view3DState: null,
       threeViewDisposers: [],
-      threeBackground: restoredUiState.threeBackground === "light" ? "light" : "dark",
+      threeBackground: restoredThreeBackground(restoredUiState),
       threeInteractionMode: validThreeInteractionMode(restoredUiState.threeInteractionMode),
       threeCamera: sanitizeThreeCamera(restoredUiState.threeCamera),
       plotCsv: {}
@@ -1910,6 +1922,7 @@ class NetLogoModelEditorProvider {
         interfaceMode: state.interfaceMode,
         runSpeed: state.runSpeed,
         threeBackground: state.threeBackground,
+        threeBackgroundPreferenceVersion: 1,
         threeInteractionMode: state.threeInteractionMode,
         threeCamera: sanitizeThreeCamera(state.threeCamera)
       });
@@ -1921,6 +1934,10 @@ class NetLogoModelEditorProvider {
 
     function validInterfaceMode(mode) {
       return mode === "layout" ? "layout" : "interact";
+    }
+
+    function restoredThreeBackground(restored) {
+      return restored.threeBackgroundPreferenceVersion === 1 && restored.threeBackground === "light" ? "light" : "dark";
     }
 
     function validThreeInteractionMode(mode) {
@@ -3800,7 +3817,7 @@ class NetLogoModelEditorProvider {
       const pickables = [];
       const agentLayer = new THREE.Group();
       scene.add(agentLayer);
-      addThreeWorldBox(scene, THREE, bounds);
+      const worldBox = addThreeWorldBox(scene, THREE, bounds);
       rebuildAgentLayer(currentViewState);
 
       const raycaster = new THREE.Raycaster();
@@ -3924,7 +3941,8 @@ class NetLogoModelEditorProvider {
         if (action === "background") {
           state.threeBackground = state.threeBackground === "dark" ? "light" : "dark";
           persistUiState();
-          renderInterface();
+          updateThreeTheme(scene, worldBox, controlsBar, THREE);
+          draw();
           return;
         }
         if (action === "fullscreen") {
@@ -4040,8 +4058,19 @@ class NetLogoModelEditorProvider {
         const action = button.dataset.action;
         if (["orbit", "zoom", "move"].includes(action)) {
           button.classList.toggle("active", action === state.threeInteractionMode);
+        } else if (action === "background") {
+          button.textContent = state.threeBackground === "dark" ? "◐" : "◑";
         }
       }
+    }
+
+    function updateThreeTheme(scene, worldBox, controlsBar, THREE) {
+      const theme = threeTheme();
+      scene.background = new THREE.Color(theme.background);
+      if (worldBox?.material?.color) {
+        worldBox.material.color.setHex(theme.box);
+      }
+      updateThreeControlsActive(controlsBar);
     }
 
     function threeStatusText(viewState) {
@@ -4116,6 +4145,7 @@ class NetLogoModelEditorProvider {
       const helper = new THREE.Box3Helper(box, 0x4d4658);
       helper.material.color.setHex(theme.box);
       scene.add(helper);
+      return helper;
     }
 
     function threeWorldEdgeBounds(THREE, bounds) {

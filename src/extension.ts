@@ -56,10 +56,11 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.workspace.onDidOpenTextDocument(document => updateNetLogoDiagnostics(document, diagnostics)),
     vscode.workspace.onDidChangeTextDocument(event => updateNetLogoDiagnostics(event.document, diagnostics)),
     vscode.workspace.onDidCloseTextDocument(document => diagnostics.delete(document.uri)),
+    vscode.window.tabGroups.onDidChangeTabs(() => keepActivePreviewTabWhenNetLogoEditorsAreOpen()),
     vscode.commands.registerCommand("netlogo.openModelEditor", async (resource?: vscode.Uri) => {
       const uri = await resolveModelUri(resource);
       if (uri) {
-        await vscode.commands.executeCommand("vscode.openWith", uri, NetLogoModelEditorProvider.viewType);
+        await vscode.commands.executeCommand("vscode.openWith", uri, NetLogoModelEditorProvider.viewType, { preview: false });
       }
     }),
     vscode.commands.registerCommand("netlogo.openInNetLogo", async (resource?: vscode.Uri) => {
@@ -102,6 +103,7 @@ export function activate(context: vscode.ExtensionContext): void {
   for (const document of vscode.workspace.textDocuments) {
     updateNetLogoDiagnostics(document, diagnostics);
   }
+  keepActivePreviewTabWhenNetLogoEditorsAreOpen();
 }
 
 export function deactivate(): void {
@@ -132,6 +134,38 @@ async function resolveModelUri(resource?: vscode.Uri): Promise<vscode.Uri | unde
 function isNetLogoUri(uri: vscode.Uri): boolean {
   const path = uri.fsPath.toLowerCase();
   return path.endsWith(".nlogo") || path.endsWith(".nlogox") || path.endsWith(".nlogo3d");
+}
+
+let keepingActivePreviewTab = false;
+
+function keepActivePreviewTabWhenNetLogoEditorsAreOpen(): void {
+  if (keepingActivePreviewTab) {
+    return;
+  }
+
+  const activeTab = vscode.window.tabGroups.activeTabGroup.activeTab;
+  if (!activeTab?.isPreview || isNetLogoModelEditorTab(activeTab) || !hasOpenNetLogoModelEditorTab()) {
+    return;
+  }
+
+  keepingActivePreviewTab = true;
+  void vscode.commands.executeCommand("workbench.action.keepEditor").then(
+    () => {
+      keepingActivePreviewTab = false;
+    },
+    () => {
+      keepingActivePreviewTab = false;
+    }
+  );
+}
+
+function hasOpenNetLogoModelEditorTab(): boolean {
+  return vscode.window.tabGroups.all.some(group => group.tabs.some(isNetLogoModelEditorTab));
+}
+
+function isNetLogoModelEditorTab(tab: vscode.Tab): boolean {
+  return tab.input instanceof vscode.TabInputCustom
+    && tab.input.viewType === NetLogoModelEditorProvider.viewType;
 }
 
 function updateNetLogoDiagnostics(

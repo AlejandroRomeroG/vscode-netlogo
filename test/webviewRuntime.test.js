@@ -238,13 +238,16 @@ test("webview mounts a local Three.js 3D view when runtime state is available", 
   assert.match(source, /function sameThreeBounds\(left, right\)/);
   assert.match(source, /function renderThreeControls\(\)/);
   assert.match(source, /button\.setAttribute\("aria-label", title\)/);
-  assert.match(source, /threeBackground: restoredUiState\.threeBackground === "light" \? "light" : "dark"/);
+  assert.match(source, /threeBackground: restoredThreeBackground\(restoredUiState\)/);
   assert.match(source, /threeInteractionMode: validThreeInteractionMode\(restoredUiState\.threeInteractionMode\)/);
   assert.match(source, /threeControlButton\("orbit", "Orbit"/);
   assert.match(source, /threeControlButton\("zoom", "Zoom"/);
   assert.match(source, /threeControlButton\("move", "Move"/);
   assert.match(source, /threeControlButton\("fullscreen", "Full", "Toggle full screen"\)/);
   assert.match(source, /function updateThreeControlsActive\(container\)/);
+  assert.match(source, /function updateThreeTheme\(scene, worldBox, controlsBar, THREE\)/);
+  assert.match(source, /updateThreeTheme\(scene, worldBox, controlsBar, THREE\)/);
+  assert.doesNotMatch(source, /if \(action === "background"\) \{[\s\S]*?renderInterface\(\);[\s\S]*?return;/);
   assert.match(source, /function panThreeCamera\(dx, dy, start\)/);
   assert.match(source, /function toggleThreeFullscreen\(targetHost\)/);
   assert.match(source, /requestFullscreen/);
@@ -325,6 +328,9 @@ test("webview persists local editor and 3D viewer preferences", () => {
   assert.match(source, /infoEditing: Boolean\(restoredUiState\.infoEditing\)/);
   assert.match(source, /interfaceMode: validInterfaceMode\(restoredUiState\.interfaceMode\)/);
   assert.match(source, /runSpeed: restoredRunSpeed\(restoredUiState\.runSpeed\)/);
+  assert.match(source, /function restoredThreeBackground\(restored\)/);
+  assert.match(source, /restored\.threeBackgroundPreferenceVersion === 1/);
+  assert.match(source, /threeBackgroundPreferenceVersion: 1/);
   assert.match(source, /threeCamera: sanitizeThreeCamera\(restoredUiState\.threeCamera\)/);
   assert.match(source, /function persistUiState\(\)/);
   assert.match(source, /vscode\.setState\?\.\(\{/);
