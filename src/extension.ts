@@ -1,3 +1,5 @@
+import * as fs from "fs";
+import * as path from "path";
 import * as vscode from "vscode";
 import { spawn } from "child_process";
 import { clearNetLogoCommandHistory, promptForNetLogoCommand, rememberNetLogoCommand } from "./commandPrompt";
@@ -716,16 +718,73 @@ function nativeNetLogoAppForResource(resource: vscode.Uri): string | undefined {
   return installation ? findNativeNetLogoApp(installation.home, { threeD: resource.fsPath.toLowerCase().endsWith(".nlogo3d") }) : undefined;
 }
 
-const nativeNetLogoWarmupMs = 1500;
-
 async function openFileWithMacApp(appPath: string, filePath: string): Promise<void> {
   try {
-    await runMacOpen(["-a", appPath]);
-    await sleep(nativeNetLogoWarmupMs);
-    await runMacOpen(["-a", appPath, filePath]);
+    const appWasRunning = await isMacAppRunning(appPath);
+    if (!appWasRunning) {
+      await launchMacAppWithArgs(appPath, ["--open", filePath]);
+      return;
+    }
+
+    try {
+      await runMacOpen(["-a", appPath, filePath]);
+      return;
+    } catch {
+      // Some Launch Services registrations prefer bundle IDs over app paths.
+    }
+
+    const bundleId = macAppBundleIdentifier(appPath);
+    if (bundleId) {
+      await runMacOpen(["-b", bundleId, filePath]);
+      return;
+    }
+
+    await vscode.env.openExternal(vscode.Uri.file(filePath));
   } catch {
     await vscode.env.openExternal(vscode.Uri.file(filePath));
   }
+}
+
+function macAppBundleIdentifier(appPath: string): string | undefined {
+  return macAppInfoValue(appPath, "CFBundleIdentifier");
+}
+
+function macAppBundleExecutable(appPath: string): string | undefined {
+  return macAppInfoValue(appPath, "CFBundleExecutable");
+}
+
+function macAppInfoValue(appPath: string, key: string): string | undefined {
+  if (!appPath.toLowerCase().endsWith(".app")) {
+    return undefined;
+  }
+
+  try {
+    const infoPath = path.join(appPath, "Contents", "Info.plist");
+    const info = fs.readFileSync(infoPath, "utf8");
+    const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return info.match(new RegExp(`<key>${escapedKey}<\\/key>\\s*<string>([^<]+)<\\/string>`))?.[1]?.trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function isMacAppRunning(appPath: string): Promise<boolean> {
+  const executable = macAppBundleExecutable(appPath);
+  if (!executable) {
+    return Promise.resolve(false);
+  }
+
+  return new Promise<boolean>(resolve => {
+    const child = spawn("pgrep", ["-x", executable], {
+      stdio: "ignore"
+    });
+    child.once("error", () => resolve(false));
+    child.once("close", code => resolve(code === 0));
+  });
+}
+
+function launchMacAppWithArgs(appPath: string, args: readonly string[]): Promise<void> {
+  return runMacOpen(["-a", appPath, "--args", ...args]);
 }
 
 function runMacOpen(args: readonly string[]): Promise<void> {
@@ -744,10 +803,6 @@ function runMacOpen(args: readonly string[]): Promise<void> {
     });
     child.unref();
   });
-}
-
-function sleep(milliseconds: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, milliseconds));
 }
 
 async function configureNetLogo(): Promise<void> {

@@ -111,8 +111,10 @@ class NetLogoModelEditorProvider {
             if (message.type === "run-command") {
                 const command = message.command.trim();
                 if (command) {
+                    const repeat = Math.max(1, Math.min(256, Math.floor(Number(message.repeat) || 1)));
+                    const executionCommand = repeat > 1 ? `repeat ${repeat} [ ${command} ]` : command;
                     await (0, commandPrompt_1.rememberNetLogoCommand)(this.context, command);
-                    await this.runAndPost(webviewPanel.webview, document.uri, command, { showProgress: message.silent !== true });
+                    await this.runAndPost(webviewPanel.webview, document.uri, executionCommand, { showProgress: message.silent !== true });
                 }
                 return;
             }
@@ -1505,7 +1507,7 @@ class NetLogoModelEditorProvider {
           <span id="speedLabel" class="speed-label">normal speed</span>
           <span class="speed-slider-wrap">
             <span class="speed-normal-mark" aria-hidden="true"></span>
-            <input id="speedSlider" type="range" min="-5" max="5" step="1" value="0" aria-label="Forever speed">
+            <input id="speedSlider" type="range" min="-10" max="10" step="1" value="0" aria-label="Forever speed">
           </span>
         </label>
         <span class="run-controls">
@@ -1586,7 +1588,6 @@ class NetLogoModelEditorProvider {
   </script>
   <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
-    vscode.postMessage({ type: "ready" });
     const restoredUiState = vscode.getState?.() ?? {};
     const knownWidgetTypes = new Set([
       "GRAPHICS-WINDOW",
@@ -1704,9 +1705,14 @@ class NetLogoModelEditorProvider {
       "ycor"
     ]);
     const netLogoNumberPattern = /^-?(?:\\d+\\.?\\d*|\\.\\d+)(?:e[+-]?\\d+)?$/i;
+    const RUN_SPEED_MIN = -10;
+    const RUN_SPEED_MAX = 10;
+    const RUN_SPEED_NORMAL_DELAY_MS = 20;
+    const RUN_SPEED_BATCHES = [2, 4, 8, 16, 24, 32, 48, 64, 96, 128];
 
     const state = {
       version: 0,
+      hasLoadedModel: false,
       activeTab: validUiTab(restoredUiState.activeTab),
       code: "",
       interfaceSource: "",
@@ -1726,6 +1732,9 @@ class NetLogoModelEditorProvider {
       viewImageDataUri: null,
       view3DState: null,
       threeViewDisposers: [],
+      threeTrailState: null,
+      threeObserverCameraKey: null,
+      threeManualRadius: null,
       threeBackground: restoredThreeBackground(restoredUiState),
       threeInteractionMode: validThreeInteractionMode(restoredUiState.threeInteractionMode),
       threeCamera: sanitizeThreeCamera(restoredUiState.threeCamera),
@@ -1842,7 +1851,7 @@ class NetLogoModelEditorProvider {
     });
 
     speedSlider.addEventListener("input", () => {
-      state.runSpeed = Number(speedSlider.value);
+      state.runSpeed = clampRunSpeed(speedSlider.value);
       persistUiState();
       updateSpeedControl();
     });
@@ -1956,6 +1965,7 @@ class NetLogoModelEditorProvider {
         return;
       }
 
+      const firstModelLoad = !state.hasLoadedModel;
       const codeEditorActive = document.activeElement === codeEditorSurface;
       const infoEditorActive = document.activeElement === infoEditorSurface;
       const sourceEditorActive = codeEditorActive || infoEditorActive;
@@ -1963,11 +1973,12 @@ class NetLogoModelEditorProvider {
       const nextInfo = message.info ?? "";
 
       state.version = message.version;
-      if (!codeEditorActive || nextCode === state.code) {
+      state.hasLoadedModel = true;
+      if (firstModelLoad || !codeEditorActive || nextCode === state.code) {
         state.code = nextCode;
       }
       state.interfaceSource = message.interfaceSource ?? "";
-      if (!infoEditorActive || nextInfo === state.info) {
+      if (firstModelLoad || !infoEditorActive || nextInfo === state.info) {
         state.info = nextInfo;
       }
       state.interfacePreview = message.interfacePreview ?? { widgets: [], bounds: { width: 820, height: 560 } };
@@ -1977,29 +1988,31 @@ class NetLogoModelEditorProvider {
       }
 
       fileName.textContent = message.fileName ?? "NetLogo";
-      if (!codeEditorActive) {
+      if (firstModelLoad || !codeEditorActive) {
         setInputValue(inputs.code, state.code);
       }
       setInputValue(inputs.interfaceSource, state.interfaceSource);
-      if (!infoEditorActive) {
+      if (firstModelLoad || !infoEditorActive) {
         setInputValue(inputs.info, state.info);
       }
-      if (!codeEditorActive) {
+      if (firstModelLoad || !codeEditorActive) {
         renderCodeHighlight();
       }
-      if (!infoEditorActive) {
+      if (firstModelLoad || !infoEditorActive) {
         renderInfo();
       }
-      if (!sourceEditorActive) {
+      if (firstModelLoad || !sourceEditorActive) {
         updateEditorLayout();
       }
       setStatus(state.runLoop ? "Running " + state.runLoop.label : message.format === "xml" ? "XML model" : "Classic model");
       updateRuntimeBanner();
       updateRunControls();
-      if (!sourceEditorActive) {
+      if (firstModelLoad || !sourceEditorActive) {
         renderInterface();
       }
     });
+
+    vscode.postMessage({ type: "ready" });
 
     function persistUiState() {
       vscode.setState?.({
@@ -2032,7 +2045,11 @@ class NetLogoModelEditorProvider {
 
     function restoredRunSpeed(value) {
       const number = Number(value);
-      return Number.isFinite(number) ? clampNumber(number, -5, 5) : 0;
+      return Number.isFinite(number) ? clampRunSpeed(number) : 0;
+    }
+
+    function clampRunSpeed(value) {
+      return clampNumber(Math.round(Number(value)), RUN_SPEED_MIN, RUN_SPEED_MAX);
     }
 
     function sanitizeThreeCamera(camera) {
@@ -2133,6 +2150,9 @@ class NetLogoModelEditorProvider {
         setInputValue(inputs.info, state.info);
         renderInfo();
         renderInfoEditor(false);
+      }
+      if (state.activeTab === "interface") {
+        renderInterface();
       }
     }
 
@@ -2902,25 +2922,34 @@ class NetLogoModelEditorProvider {
       }, 250));
     }
 
-    function postRunCommand(command, silent) {
+    function postRunCommand(command, silent, repeat = 1) {
       state.runtimeStatus = "running";
       updateRuntimeBanner();
       setStatus("Running " + command);
-      vscode.postMessage({ type: "run-command", command, silent });
+      vscode.postMessage({ type: "run-command", command, repeat, silent });
     }
 
     function updateSpeedControl() {
+      state.runSpeed = clampRunSpeed(state.runSpeed);
       speedSlider.value = String(state.runSpeed);
       const delay = runLoopDelayMs();
+      const batchSize = runLoopBatchSize();
       const label = runSpeedLabel();
       speedLabel.textContent = label;
-      speedSlider.title = label + (delay === 0 ? "" : " · " + delay + " ms");
-      speedSlider.setAttribute("aria-valuetext", delay === 0 ? label : label + ", " + delay + " milliseconds");
+      const timing = delay === 0 ? "" : " · " + delay + " ms";
+      const batching = batchSize > 1 ? " · " + batchSize + " ticks/update" : "";
+      speedSlider.title = label + timing + batching;
+      speedSlider.setAttribute(
+        "aria-valuetext",
+        label
+          + (delay === 0 ? "" : ", " + delay + " milliseconds")
+          + (batchSize > 1 ? ", " + batchSize + " ticks per update" : "")
+      );
     }
 
     function runSpeedLabel() {
-      const speed = clampNumber(Number(state.runSpeed), -5, 5);
-      if (speed <= -5) {
+      const speed = clampRunSpeed(state.runSpeed);
+      if (speed <= RUN_SPEED_MIN) {
         return "slowest";
       }
       if (speed < 0) {
@@ -2929,18 +2958,26 @@ class NetLogoModelEditorProvider {
       if (speed === 0) {
         return "normal speed";
       }
-      if (speed >= 5) {
+      if (speed >= RUN_SPEED_MAX) {
         return "fastest";
       }
       return "faster";
     }
 
     function runLoopDelayMs() {
-      const speed = clampNumber(Number(state.runSpeed), -5, 5);
-      if (speed >= 0) {
-        return Math.max(0, 120 - speed * 24);
+      const speed = clampRunSpeed(state.runSpeed);
+      if (speed < 0) {
+        return Math.round(RUN_SPEED_NORMAL_DELAY_MS * Math.pow(1.5, Math.abs(speed)));
       }
-      return [250, 500, 900, 1400, 2200][Math.abs(speed) - 1] ?? 120;
+      return Math.max(0, Math.round(RUN_SPEED_NORMAL_DELAY_MS * Math.pow(0.62, speed)));
+    }
+
+    function runLoopBatchSize() {
+      const speed = clampRunSpeed(state.runSpeed);
+      if (speed <= 0) {
+        return 1;
+      }
+      return RUN_SPEED_BATCHES[speed - 1] ?? RUN_SPEED_BATCHES[RUN_SPEED_BATCHES.length - 1];
     }
 
     function startRunLoop(command, label) {
@@ -2980,7 +3017,7 @@ class NetLogoModelEditorProvider {
       }
 
       loop.waiting = true;
-      postRunCommand(loop.command, true);
+      postRunCommand(loop.command, true, runLoopBatchSize());
     }
 
     function updateRunControls() {
@@ -3919,7 +3956,12 @@ class NetLogoModelEditorProvider {
         controls.targetZ = baseTarget.z;
       }
 
+      applyThreeObserverCamera(currentViewState);
+
       const pickables = [];
+      const trailLayer = new THREE.Group();
+      scene.add(trailLayer);
+      const trailState = ensureThreeTrailState(bounds, span);
       const agentLayer = new THREE.Group();
       scene.add(agentLayer);
       const worldBox = addThreeWorldBox(scene, THREE, bounds);
@@ -3939,7 +3981,7 @@ class NetLogoModelEditorProvider {
 
       function updateCamera() {
         controls.phi = Math.max(0.08, Math.min(Math.PI - 0.08, controls.phi));
-        controls.radius = Math.max(span * 0.35, Math.min(span * 8, controls.radius));
+        controls.radius = clampThreeRadius(controls.radius);
         target.set(controls.targetX, controls.targetY, controls.targetZ);
         const sinPhi = Math.sin(controls.phi);
         camera.position.set(
@@ -3958,12 +4000,16 @@ class NetLogoModelEditorProvider {
         controls.targetX = next.targetX;
         controls.targetY = next.targetY;
         controls.targetZ = next.targetZ;
+        state.threeManualRadius = null;
         saveThreeCamera();
         draw();
       }
 
-      function saveThreeCamera() {
+      function saveThreeCamera(useManualRadius = false) {
         state.threeCamera = { ...controls };
+        if (useManualRadius) {
+          state.threeManualRadius = controls.radius;
+        }
         persistUiState();
       }
 
@@ -4001,14 +4047,14 @@ class NetLogoModelEditorProvider {
         const dx = event.clientX - drag.x;
         const dy = event.clientY - drag.y;
         if (drag.mode === "zoom") {
-          controls.radius = drag.radius * Math.exp(dy * 0.012);
+          controls.radius = clampThreeRadius(drag.radius * Math.exp(dy * 0.012));
         } else if (drag.mode === "move") {
           panThreeCamera(dx, dy, drag);
         } else {
           controls.theta = drag.theta - dx * 0.01;
           controls.phi = drag.phi + dy * 0.01;
         }
-        saveThreeCamera();
+        saveThreeCamera(drag.mode === "zoom");
         draw();
       });
       host.addEventListener("pointerup", event => {
@@ -4021,8 +4067,8 @@ class NetLogoModelEditorProvider {
       host.addEventListener("wheel", event => {
         event.preventDefault();
         event.stopPropagation();
-        controls.radius *= event.deltaY > 0 ? 1.12 : 0.88;
-        saveThreeCamera();
+        controls.radius = clampThreeRadius(controls.radius * (event.deltaY > 0 ? 1.12 : 0.88));
+        saveThreeCamera(true);
         draw();
       }, { passive: false });
 
@@ -4074,7 +4120,9 @@ class NetLogoModelEditorProvider {
 
       function rebuildAgentLayer(nextViewState) {
         currentViewState = nextViewState;
+        applyThreeObserverCamera(currentViewState);
         pickables.length = 0;
+        updateThreePenTrails(trailLayer, THREE, trailState, currentViewState);
         geometryDispose(agentLayer);
         agentLayer.clear();
         addThreePatches(agentLayer, THREE, currentViewState.patches ?? [], pickables);
@@ -4083,6 +4131,33 @@ class NetLogoModelEditorProvider {
         addThreeLabels(agentLayer, THREE, currentViewState.turtles, currentViewState.links);
         label.textContent = threeStatusText(currentViewState);
         draw();
+      }
+
+      function applyThreeObserverCamera(viewState) {
+        const key = threeObserverCameraKey(viewState.observer);
+        if (!key || key === state.threeObserverCameraKey) {
+          return;
+        }
+
+        const observerControls = threeObserverCameraControls(viewState.observer, baseTarget, span);
+        if (!observerControls) {
+          return;
+        }
+
+        controls.theta = observerControls.theta;
+        controls.phi = observerControls.phi;
+        controls.radius = Number.isFinite(Number(state.threeManualRadius))
+          ? clampThreeRadius(Number(state.threeManualRadius))
+          : observerControls.radius;
+        controls.targetX = observerControls.targetX;
+        controls.targetY = observerControls.targetY;
+        controls.targetZ = observerControls.targetZ;
+        state.threeCamera = { ...controls };
+        state.threeObserverCameraKey = key;
+      }
+
+      function clampThreeRadius(value) {
+        return Math.max(span * 0.35, Math.min(span * 8, Number(value) || span * 1.9));
       }
 
       function panThreeCamera(dx, dy, start) {
@@ -4186,6 +4261,9 @@ class NetLogoModelEditorProvider {
       if (viewState.patches?.length) {
         parts.push(viewState.patches.length + " patches");
       }
+      if (viewState.drawingLines?.length) {
+        parts.push(viewState.drawingLines.length + " trails");
+      }
       return parts.join(" · ");
     }
 
@@ -4210,6 +4288,49 @@ class NetLogoModelEditorProvider {
         default:
           return { theta: Math.PI / 4, phi: Math.PI / 3, radius: span * 1.9, targetX: baseTarget.x, targetY: baseTarget.y, targetZ: baseTarget.z };
       }
+    }
+
+    function threeObserverCameraControls(observer, baseTarget, span) {
+      if (!observer) {
+        return undefined;
+      }
+
+      const x = Number(observer.x);
+      const y = Number(observer.y);
+      const z = Number(observer.z);
+      if (![x, y, z].every(Number.isFinite)) {
+        return undefined;
+      }
+
+      const dx = x - baseTarget.x;
+      const dy = z - baseTarget.y;
+      const dz = y - baseTarget.z;
+      const radius = Math.hypot(dx, dy, dz);
+      if (radius <= 0.001) {
+        return undefined;
+      }
+
+      return {
+        theta: Math.atan2(-dx, dz),
+        phi: Math.acos(clampNumber(dy / radius, -1, 1)),
+        radius: Math.max(span * 0.35, Math.min(span * 8, radius)),
+        targetX: baseTarget.x,
+        targetY: baseTarget.y,
+        targetZ: baseTarget.z
+      };
+    }
+
+    function threeObserverCameraKey(observer) {
+      if (!observer) {
+        return "";
+      }
+      const x = Number(observer.x);
+      const y = Number(observer.y);
+      const z = Number(observer.z);
+      if (![x, y, z].every(Number.isFinite)) {
+        return "";
+      }
+      return [x, y, z].map(value => value.toFixed(4)).join("|");
     }
 
     function sameThreeBounds(left, right) {
@@ -4298,7 +4419,8 @@ class NetLogoModelEditorProvider {
         mesh.userData = { kind: "turtle", items: group.items };
 
         group.items.forEach((turtle, index) => {
-          const size = Math.max(0.35, Number(turtle.size) || 1);
+          const rawSize = Number(turtle.size);
+          const size = Number.isFinite(rawSize) && rawSize > 0 ? Math.max(0.01, rawSize) : 1;
           const position = netLogoVector(THREE, turtle.x, turtle.y, turtle.z);
           const direction = turtleDirection(THREE, turtle.heading, turtle.pitch);
           const quaternion = group.geometryKey === "sphere"
@@ -4459,6 +4581,236 @@ class NetLogoModelEditorProvider {
         position.y += 0.35;
         scene.add(threeTextSprite(THREE, String(link.label), threeColorHex(link, "labelColor", "labelColorRgb"), position));
       }
+    }
+
+    function ensureThreeTrailState(bounds, span) {
+      const boundsKey = threeBoundsKey(bounds);
+      if (!state.threeTrailState || state.threeTrailState.boundsKey !== boundsKey) {
+        state.threeTrailState = createThreeTrailState(boundsKey, span);
+      } else {
+        state.threeTrailState.maxDistance = Math.max(2, span * 0.42);
+        state.threeTrailState.maxNewTurtleDistance = Math.max(3, span * 0.24);
+      }
+      return state.threeTrailState;
+    }
+
+    function createThreeTrailState(boundsKey, span) {
+      return {
+        boundsKey,
+        previous: new Map(),
+        segments: [],
+        source: "turtle",
+        maxSegments: 100000,
+        maxDistance: Math.max(2, span * 0.42),
+        maxNewTurtleDistance: Math.max(3, span * 0.24)
+      };
+    }
+
+    function updateThreePenTrails(layer, THREE, trailState, viewState) {
+      const drawingLines = Array.isArray(viewState.drawingLines) ? viewState.drawingLines : [];
+      if (drawingLines.length) {
+        trailState.previous = new Map();
+        trailState.source = "drawing";
+        trailState.segments = threeDrawingLineSegments(drawingLines, Math.max(trailState.maxSegments, drawingLines.length));
+        renderThreeTrailSegments(layer, THREE, trailState.segments);
+        return;
+      }
+
+      if (trailState.source === "drawing") {
+        clearThreeTrailState(layer, trailState);
+      }
+      trailState.source = "turtle";
+
+      const turtles = viewState.turtles ?? [];
+      if (!turtles.length) {
+        clearThreeTrailState(layer, trailState);
+        return;
+      }
+
+      const hasPenDownTurtle = turtles.some(threePenIsDown);
+      const sharesPreviousTurtle = turtles.some(turtle => trailState.previous.has(turtle.who));
+      if (!hasPenDownTurtle && trailState.segments.length && !sharesPreviousTurtle) {
+        clearThreeTrailState(layer, trailState);
+      }
+
+      const nextPrevious = new Map();
+      for (const turtle of turtles) {
+        const point = threeTrailPoint(turtle);
+        if (!point) {
+          continue;
+        }
+        const penDown = threePenIsDown(turtle);
+        const previous = trailState.previous.get(turtle.who);
+        if (previous?.penDown && penDown) {
+          const distance = threeTrailDistance(previous.point, point);
+          if (distance > 0.001 && distance <= trailState.maxDistance) {
+            trailState.segments.push({
+              start: previous.point,
+              end: point,
+              color: threeColorHex(turtle)
+            });
+          }
+        } else if (!previous && penDown) {
+          const parent = nearestThreeTrailPrevious(point, trailState.previous, trailState.maxNewTurtleDistance);
+          if (parent) {
+            trailState.segments.push({
+              start: parent.point,
+              end: point,
+              color: threeColorHex(turtle)
+            });
+          }
+        }
+        nextPrevious.set(turtle.who, { point, penDown });
+      }
+
+      trailState.previous = nextPrevious;
+      if (trailState.segments.length > trailState.maxSegments) {
+        trailState.segments.splice(0, trailState.segments.length - trailState.maxSegments);
+      }
+      renderThreeTrailSegments(layer, THREE, trailState.segments);
+    }
+
+    function threeDrawingLineSegments(lines, maxSegments) {
+      const segments = [];
+      const start = Math.max(0, lines.length - maxSegments);
+      for (let index = start; index < lines.length; index += 1) {
+        const line = lines[index];
+        const segment = {
+          start: {
+            x: Number(line.x0),
+            y: Number(line.y0),
+            z: Number(line.z0)
+          },
+          end: threeDrawingLineEnd(line),
+          color: threeColorHex(line),
+          width: Math.max(1, Number(line.width) || 1)
+        };
+        if (threeTrailPointIsValid(segment.start) && threeTrailPointIsValid(segment.end)) {
+          segments.push(segment);
+        }
+      }
+      return segments;
+    }
+
+    function threeDrawingLineEnd(line) {
+      const fallback = {
+        x: Number(line.x1),
+        y: Number(line.y1),
+        z: Number(line.z1)
+      };
+      const x0 = Number(line.x0);
+      const y0 = Number(line.y0);
+      const z0 = Number(line.z0);
+      const heading = Number(line.heading);
+      const pitch = Number(line.pitch);
+      const length = Number(line.length);
+      if (![x0, y0, z0, heading, pitch, length].every(Number.isFinite) || length <= 0) {
+        return fallback;
+      }
+
+      const headingRadians = heading * Math.PI / 180;
+      const pitchRadians = pitch * Math.PI / 180;
+      const horizontalLength = length * Math.cos(pitchRadians);
+      return {
+        x: x0 + Math.sin(headingRadians) * horizontalLength,
+        y: y0 + Math.cos(headingRadians) * horizontalLength,
+        z: z0 + Math.sin(pitchRadians) * length
+      };
+    }
+
+    function clearThreeTrailState(layer, trailState) {
+      trailState.previous = new Map();
+      trailState.segments = [];
+      trailState.source = "turtle";
+      geometryDispose(layer);
+      layer.clear();
+    }
+
+    function renderThreeTrailSegments(layer, THREE, segments) {
+      geometryDispose(layer);
+      layer.clear();
+      if (!segments.length) {
+        return;
+      }
+
+      const groups = new Map();
+      for (const segment of segments) {
+        const width = Math.max(1, Number(segment.width) || 1);
+        const key = segment.color + "|" + width;
+        const group = groups.get(key) ?? {
+          color: segment.color,
+          width,
+          positions: []
+        };
+        const positions = group.positions;
+        positions.push(
+          segment.start.x, segment.start.z, segment.start.y,
+          segment.end.x, segment.end.z, segment.end.y
+        );
+        groups.set(key, group);
+      }
+
+      for (const group of groups.values()) {
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute("position", new THREE.Float32BufferAttribute(group.positions, 3));
+        const material = new THREE.LineBasicMaterial({
+          color: group.color,
+          linewidth: group.width,
+          transparent: false,
+          opacity: 1,
+          depthWrite: true
+        });
+        layer.add(new THREE.LineSegments(geometry, material));
+      }
+    }
+
+    function threeTrailPoint(turtle) {
+      const x = Number(turtle.x);
+      const y = Number(turtle.y);
+      const z = Number(turtle.z);
+      if (![x, y, z].every(Number.isFinite)) {
+        return undefined;
+      }
+      return { x, y, z };
+    }
+
+    function threeTrailPointIsValid(point) {
+      return [point.x, point.y, point.z].every(Number.isFinite);
+    }
+
+    function threePenIsDown(turtle) {
+      return String(turtle.penMode ?? "").trim().toLowerCase() === "down";
+    }
+
+    function nearestThreeTrailPrevious(point, previous, maxDistance) {
+      let nearest;
+      let nearestDistance = maxDistance;
+      for (const entry of previous.values()) {
+        const distance = threeTrailDistance(entry.point, point);
+        if (distance > 0.001 && distance <= nearestDistance) {
+          nearest = entry;
+          nearestDistance = distance;
+        }
+      }
+      return nearest;
+    }
+
+    function threeTrailDistance(left, right) {
+      const dx = right.x - left.x;
+      const dy = right.y - left.y;
+      const dz = right.z - left.z;
+      return Math.hypot(dx, dy, dz);
+    }
+
+    function threeBoundsKey(bounds) {
+      return [
+        bounds.minX,
+        bounds.maxX,
+        bounds.minY,
+        bounds.maxY,
+        bounds.minZ,
+        bounds.maxZ
+      ].join("|");
     }
 
     function threeTextSprite(THREE, text, color, position) {

@@ -4,6 +4,7 @@ import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStreamReader;
 import java.io.PrintStream;
+import java.awt.Color;
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -19,6 +20,7 @@ public final class NetLogoCommandBridge {
   private static final String REPORT = "__NETLOGO_REPORT__";
   private static final String VIEW = "__NETLOGO_VIEW__";
   private static final String PLOT = "__NETLOGO_PLOT__";
+  private static final String DRAWING_3D = "__NETLOGO_DRAWING_3D__";
 
   private NetLogoCommandBridge() {
   }
@@ -162,6 +164,8 @@ public final class NetLogoCommandBridge {
           String path = decodePayload(parts[1]);
           byte[] bytes = exportPlot(workspace, plotName, path);
           System.out.println(PLOT + Base64.getEncoder().encodeToString(bytes));
+        } else if ("DRAWING_3D".equals(line)) {
+          System.out.println(DRAWING_3D + encodePayload(exportDrawing3D(workspace)));
         } else {
           String command = line.startsWith("COMMAND ")
             ? decodePayload(line.substring("COMMAND ".length()))
@@ -228,6 +232,36 @@ public final class NetLogoCommandBridge {
         // Export files are temporary; a failed cleanup should not hide the real result.
       }
     }
+  }
+
+  private static String exportDrawing3D(HeadlessWorkspace workspace) throws Throwable {
+    Object world = workspace.world();
+    Method getDrawing = world.getClass().getMethod("getDrawing");
+    Object drawing = getDrawing.invoke(world);
+    if (!(drawing instanceof org.nlogo.api.Drawing3D)) {
+      return "";
+    }
+
+    StringBuilder output = new StringBuilder();
+    for (org.nlogo.api.DrawingLine3D line : ((org.nlogo.api.Drawing3D) drawing).lines()) {
+      Color color = org.nlogo.api.Color.getColor(line.color());
+      output
+        .append(line.x0()).append('|')
+        .append(line.y0()).append('|')
+        .append(line.z0()).append('|')
+        .append(line.x1()).append('|')
+        .append(line.y1()).append('|')
+        .append(line.z1()).append('|')
+        .append(line.width()).append('|')
+        .append(String.valueOf(line.color())).append('|')
+        .append(color.getRed()).append('|')
+        .append(color.getGreen()).append('|')
+        .append(color.getBlue()).append('|')
+        .append(line.heading()).append('|')
+        .append(line.pitch()).append('|')
+        .append(line.length()).append('\n');
+    }
+    return output.toString();
   }
 
   private static String quoteNetLogoString(String value) {

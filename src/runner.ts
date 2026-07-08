@@ -38,9 +38,11 @@ export interface PlotValue {
 
 export interface View3DState {
   readonly bounds: View3DBounds;
+  readonly observer?: Observer3DValue;
   readonly turtles: readonly Turtle3DValue[];
   readonly links: readonly Link3DValue[];
   readonly patches: readonly Patch3DValue[];
+  readonly drawingLines: readonly DrawingLine3DValue[];
 }
 
 export interface View3DBounds {
@@ -58,6 +60,12 @@ export interface Rgb3DValue {
   readonly blue: number;
 }
 
+export interface Observer3DValue {
+  readonly x: number;
+  readonly y: number;
+  readonly z: number;
+}
+
 export interface Turtle3DValue {
   readonly who: number;
   readonly x: number;
@@ -68,6 +76,8 @@ export interface Turtle3DValue {
   readonly heading: number;
   readonly pitch: number;
   readonly size: number;
+  readonly penMode?: string;
+  readonly penSize?: number;
   readonly shape?: string;
   readonly label?: string;
   readonly labelColor?: number;
@@ -93,6 +103,21 @@ export interface Patch3DValue {
   readonly z: number;
   readonly color: number;
   readonly colorRgb?: Rgb3DValue;
+}
+
+export interface DrawingLine3DValue {
+  readonly x0: number;
+  readonly y0: number;
+  readonly z0: number;
+  readonly x1: number;
+  readonly y1: number;
+  readonly z1: number;
+  readonly width: number;
+  readonly color: number;
+  readonly colorRgb?: Rgb3DValue;
+  readonly heading?: number;
+  readonly pitch?: number;
+  readonly length?: number;
 }
 
 export interface NetLogoRunOptions {
@@ -434,7 +459,7 @@ export class NetLogoRunner implements vscode.Disposable {
 
       const turtlesText = await this.tryReport3DList(
         session,
-        "[ (word who \"|\" xcor \"|\" ycor \"|\" zcor \"|\" color \"|\" (item 0 (extract-rgb color)) \"|\" (item 1 (extract-rgb color)) \"|\" (item 2 (extract-rgb color)) \"|\" heading \"|\" pitch \"|\" size \"|\" shape \"|\" label \"|\" label-color \"|\" (item 0 (extract-rgb label-color)) \"|\" (item 1 (extract-rgb label-color)) \"|\" (item 2 (extract-rgb label-color))) ] of turtles",
+        "[ (word who \"|\" xcor \"|\" ycor \"|\" zcor \"|\" color \"|\" (item 0 (extract-rgb color)) \"|\" (item 1 (extract-rgb color)) \"|\" (item 2 (extract-rgb color)) \"|\" heading \"|\" pitch \"|\" size \"|\" shape \"|\" label \"|\" label-color \"|\" (item 0 (extract-rgb label-color)) \"|\" (item 1 (extract-rgb label-color)) \"|\" (item 2 (extract-rgb label-color)) \"|\" pen-mode \"|\" pen-size) ] of turtles",
         "turtles",
         verboseOutput
       );
@@ -450,16 +475,38 @@ export class NetLogoRunner implements vscode.Disposable {
         "patches",
         verboseOutput
       );
+      const observer = await this.tryReportView3DObserver(session, verboseOutput);
+      const drawingLinesText = await this.tryReportDrawing3D(session, verboseOutput);
 
       return {
         bounds,
+        observer,
         turtles: parseNetLogoDelimitedList(turtlesText).map(parseTurtle3DValue).filter((value): value is Turtle3DValue => value !== undefined),
         links: parseNetLogoDelimitedList(linksText).map(parseLink3DValue).filter((value): value is Link3DValue => value !== undefined),
-        patches: parseNetLogoDelimitedList(patchesText).map(parsePatch3DValue).filter((value): value is Patch3DValue => value !== undefined)
+        patches: parseNetLogoDelimitedList(patchesText).map(parsePatch3DValue).filter((value): value is Patch3DValue => value !== undefined),
+        drawingLines: parseDrawingLine3DValues(drawingLinesText)
       };
     } catch (error) {
       this.logVerbose(verboseOutput, `3D view state failed: ${formatNetLogoErrorMessage(error)}`);
       return undefined;
+    }
+  }
+
+  private async tryReportView3DObserver(session: NetLogoSession, verboseOutput: boolean): Promise<Observer3DValue | undefined> {
+    try {
+      return parseView3DObserver(await session.report("list __oxcor __oycor __ozcor", { showError: false }));
+    } catch (error) {
+      this.logVerbose(verboseOutput, `3D observer report failed: ${formatNetLogoErrorMessage(error)}`);
+      return undefined;
+    }
+  }
+
+  private async tryReportDrawing3D(session: NetLogoSession, verboseOutput: boolean): Promise<string> {
+    try {
+      return await session.reportDrawing3D();
+    } catch (error) {
+      this.logVerbose(verboseOutput, `3D drawing report failed: ${formatNetLogoErrorMessage(error)}`);
+      return "";
     }
   }
 
@@ -500,6 +547,7 @@ class NetLogoSession implements vscode.Disposable {
   private static readonly reportMarker = "__NETLOGO_REPORT__";
   private static readonly viewMarker = "__NETLOGO_VIEW__";
   private static readonly plotMarker = "__NETLOGO_PLOT__";
+  private static readonly drawing3DMarker = "__NETLOGO_DRAWING_3D__";
 
   private readonly child: ChildProcessWithoutNullStreams;
 
@@ -604,6 +652,12 @@ class NetLogoSession implements vscode.Disposable {
     return next;
   }
 
+  public async reportDrawing3D(): Promise<string> {
+    const next = this.commandChain.catch(() => undefined).then(() => this.reportDrawing3DNow());
+    this.commandChain = next.then(() => undefined);
+    return next;
+  }
+
   public dispose(): void {
     if (this.isDisposed) {
       return;
@@ -695,6 +749,23 @@ class NetLogoSession implements vscode.Disposable {
     });
   }
 
+  private async reportDrawing3DNow(): Promise<string> {
+    if (this.isDisposed) {
+      throw new Error("NetLogo session is already closed.");
+    }
+
+    await this.ready;
+    this.logVerbose("netlogo:drawing-3d>");
+
+    return this.createPending<string>("3D drawing", () => {
+      this.child.stdin.write("DRAWING_3D\n", "utf8", error => {
+        if (error) {
+          this.failPending(error);
+        }
+      });
+    });
+  }
+
   private handleStdout(text: string): void {
     this.stdoutBuffer += text;
     const lines = this.stdoutBuffer.split(/\r?\n/);
@@ -737,6 +808,14 @@ class NetLogoSession implements vscode.Disposable {
       const value = line.slice(NetLogoSession.plotMarker.length);
       this.resolvePending(value);
       this.logVerbose("Plot exported.");
+      return;
+    }
+
+    if (line.startsWith(NetLogoSession.drawing3DMarker)) {
+      const encoded = line.slice(NetLogoSession.drawing3DMarker.length);
+      const value = Buffer.from(encoded, "base64").toString("utf8");
+      this.resolvePending(value);
+      this.logVerbose("3D drawing exported.");
       return;
     }
 
@@ -832,6 +911,19 @@ function parseView3DBounds(value: string): View3DBounds | undefined {
   };
 }
 
+function parseView3DObserver(value: string): Observer3DValue | undefined {
+  const numbers = parseNetLogoNumberList(value);
+  if (numbers.length < 3) {
+    return undefined;
+  }
+
+  return {
+    x: numbers[0],
+    y: numbers[1],
+    z: numbers[2]
+  };
+}
+
 function parseNetLogoNumberList(value: string): number[] {
   return value
     .replace(/^\s*\[/, "")
@@ -922,7 +1014,10 @@ function parseTurtle3DValue(value: string): Turtle3DValue | undefined {
   const shapeIndex = hasRgb ? 11 : 8;
   const labelIndex = hasRgb ? 12 : 9;
   const labelColorIndex = hasRgb ? 13 : 10;
+  const penModeIndex = hasRgb ? 17 : 11;
+  const penSizeIndex = hasRgb ? 18 : 12;
   const labelColor = Number(parts[labelColorIndex]);
+  const penSize = Number(parts[penSizeIndex]);
   return {
     who: numbers[0],
     x: numbers[1],
@@ -933,6 +1028,8 @@ function parseTurtle3DValue(value: string): Turtle3DValue | undefined {
     heading: numbers[5],
     pitch: numbers[6],
     size: numbers[7],
+    penMode: parts[penModeIndex]?.trim() || undefined,
+    penSize: Number.isFinite(penSize) ? penSize : undefined,
     shape: parts[shapeIndex]?.trim() || undefined,
     label: parts[labelIndex] ?? "",
     labelColor: Number.isFinite(labelColor) ? labelColor : undefined,
@@ -984,6 +1081,47 @@ function parsePatch3DValue(value: string): Patch3DValue | undefined {
     color: numbers[3],
     colorRgb: parseRgb3DValue(parts, 4)
   };
+}
+
+function parseDrawingLine3DValues(value: string): readonly DrawingLine3DValue[] {
+  return value
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(Boolean)
+    .map(parseDrawingLine3DValue)
+    .filter((line): line is DrawingLine3DValue => line !== undefined);
+}
+
+function parseDrawingLine3DValue(value: string): DrawingLine3DValue | undefined {
+  const parts = value.split("|");
+  const numbers = [0, 1, 2, 3, 4, 5, 6, 7].map(index => Number(parts[index]));
+  if (numbers.some(part => !Number.isFinite(part))) {
+    return undefined;
+  }
+
+  return {
+    x0: numbers[0],
+    y0: numbers[1],
+    z0: numbers[2],
+    x1: numbers[3],
+    y1: numbers[4],
+    z1: numbers[5],
+    width: numbers[6],
+    color: numbers[7],
+    colorRgb: parseRgb3DValue(parts, 8),
+    heading: parseOptionalNumber(parts[11]),
+    pitch: parseOptionalNumber(parts[12]),
+    length: parseOptionalNumber(parts[13])
+  };
+}
+
+function parseOptionalNumber(value: string | undefined): number | undefined {
+  if (value === undefined || value === "") {
+    return undefined;
+  }
+
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
 }
 
 function parseRgb3DValue(parts: string[], start: number): Rgb3DValue | undefined {
