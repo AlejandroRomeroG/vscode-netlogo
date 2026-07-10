@@ -198,6 +198,62 @@ test("Java bridge runs 3D models with a 3D workspace", {
   }
 });
 
+test("Java bridge exports every Tree Simple 3D trail in compact binary form", {
+  skip: detectedInstallation && hasTree3DSampleModel(detectedInstallation.home)
+    ? false
+    : "No local Tree Simple 3D sample model detected"
+}, () => {
+  const classesDir = fs.mkdtempSync(path.join(os.tmpdir(), "netlogo-bridge-tree-3d-integration-"));
+  try {
+    const classPath = detectedInstallation.classPath.join(path.delimiter);
+    const bridgePath = path.join(root, "resources", "java", "NetLogoCommandBridge.java");
+    const compile = spawnSync("javac", ["-cp", classPath, "-d", classesDir, bridgePath], {
+      encoding: "utf8"
+    });
+    assert.equal(compile.status, 0, compile.stderr || compile.stdout);
+
+    const exportPath = path.join(classesDir, "tree-drawing.bin");
+    const runtimeClassPath = [classesDir, ...detectedInstallation.classPath].join(path.delimiter);
+    const input = [
+      commandLine("COMMAND", "setup"),
+      commandLine("COMMAND", "repeat 8 [ iterate ]"),
+      commandLine("REPORT", "count turtles"),
+      exportDrawing3DBinaryLine(exportPath)
+    ].join("\n") + "\n";
+    const run = spawnSync("java", [
+      ...detectedInstallation.jvmArgs,
+      "-cp",
+      runtimeClassPath,
+      "NetLogoCommandBridge",
+      "--3d",
+      path.join(detectedInstallation.home, "models", "3D", "Sample Models", "Tree Simple 3D.nlogo3d")
+    ], {
+      input,
+      encoding: "utf8",
+      maxBuffer: 4 * 1024 * 1024,
+      timeout: 5 * 60_000
+    });
+
+    assert.equal(run.status, 0, run.stderr || run.stdout);
+    assert.match(run.stdout, /__NETLOGO_REPORT__NjU1MzYuMA==/);
+    const drawing = fs.readFileSync(exportPath);
+    assert.equal(drawing.subarray(0, 4).toString("ascii"), "NLD3");
+    assert.equal(drawing.readUInt32BE(4), 2);
+    assert.equal(drawing.readUInt32BE(8), 599_989);
+    const recordCount = drawing.readUInt32BE(12);
+    assert.equal(recordCount > 0 && recordCount < 599_989, true);
+    assert.equal(drawing.readUInt32BE(16), 32);
+    assert.equal(drawing.length, 20 + recordCount * 32);
+    assert.equal(drawing.readFloatBE(20), 0);
+    assert.equal(drawing.readFloatBE(20 + 4), 0);
+    assert.equal(drawing.readFloatBE(20 + 8), -30);
+    assert.equal(drawing.readFloatBE(20 + 20), -28);
+    assert.equal(drawing.readUInt32BE(20 + 28), 0xffeded31);
+  } finally {
+    fs.rmSync(classesDir, { recursive: true, force: true });
+  }
+});
+
 function commandLine(kind, value) {
   return `${kind} ${encode(value)}`;
 }
@@ -210,12 +266,20 @@ function exportPlotLine(plotName, filePath) {
   return `EXPORT_PLOT ${encode(plotName)} ${encode(filePath)}`;
 }
 
+function exportDrawing3DBinaryLine(filePath) {
+  return `EXPORT_DRAWING_3D_BINARY ${encode(filePath)}`;
+}
+
 function encode(value) {
   return Buffer.from(value, "utf8").toString("base64");
 }
 
 function has3DSampleModel(home) {
   return fs.existsSync(path.join(home, "models", "3D", "Sample Models", "Flocking 3D.nlogo3d"));
+}
+
+function hasTree3DSampleModel(home) {
+  return fs.existsSync(path.join(home, "models", "3D", "Sample Models", "Tree Simple 3D.nlogo3d"));
 }
 
 function hasBiologySampleModel(home, fileName) {

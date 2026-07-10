@@ -36,14 +36,22 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.NetLogoRunner = void 0;
 exports.formatNetLogoErrorMessage = formatNetLogoErrorMessage;
 exports.parseNetLogoDelimitedList = parseNetLogoDelimitedList;
+exports.parseTurtle3DValue = parseTurtle3DValue;
+exports.parseLink3DValue = parseLink3DValue;
+exports.parsePatch3DValue = parsePatch3DValue;
+exports.parseDrawing3DBinaryCount = parseDrawing3DBinaryCount;
+exports.parseDrawing3DBinaryMetadata = parseDrawing3DBinaryMetadata;
+exports.parseDrawingLine3DValue = parseDrawingLine3DValue;
 const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
+const crypto_1 = require("crypto");
 const child_process_1 = require("child_process");
 const vscode = __importStar(require("vscode"));
 const classicInterface_1 = require("./classicInterface");
 const netlogoInstallation_1 = require("./netlogoInstallation");
 const modelFormat_1 = require("./modelFormat");
 const DEFAULT_COMMAND_TIMEOUT_MS = 60000;
+const DRAWING_3D_RENDER_LIMIT = 160000;
 function formatNetLogoErrorMessage(error) {
     const message = stripJavaStackTrace((error instanceof Error ? error.message : String(error)).trim());
     if (/Unable to open model with current format/i.test(message)) {
@@ -200,11 +208,14 @@ class NetLogoRunner {
         const classesDir = path.join(storageDir, "netlogo-bridge");
         const sourcePath = vscode.Uri.joinPath(this.context.extensionUri, "resources", "java", "NetLogoCommandBridge.java").fsPath;
         const classFile = path.join(classesDir, "NetLogoCommandBridge.class");
+        const hashFile = path.join(classesDir, "NetLogoCommandBridge.sha256");
+        const sourceHash = fileSha256(sourcePath);
         fs.mkdirSync(classesDir, { recursive: true });
-        if (isFresh(classFile, sourcePath)) {
+        if (isFresh(classFile, sourcePath) && readTextFile(hashFile) === sourceHash) {
             return classesDir;
         }
         await this.spawnLogged(javacPath, ["-cp", classPath.join(path.delimiter), "-d", classesDir, sourcePath], verboseOutput, commandTimeoutMs);
+        fs.writeFileSync(hashFile, sourceHash, "utf8");
         return classesDir;
     }
     async spawnLogged(command, args, verboseOutput, commandTimeoutMs) {
@@ -321,18 +332,26 @@ class NetLogoRunner {
             if (!bounds) {
                 return undefined;
             }
+            const turtleCount = await this.tryReport3DCount(session, "count turtles", "turtles", verboseOutput);
+            const linkCount = await this.tryReport3DCount(session, "count links", "links", verboseOutput);
+            const patchCount = await this.tryReport3DCount(session, "count patches with [pcolor != black]", "patches", verboseOutput);
             const turtlesText = await this.tryReport3DList(session, "[ (word who \"|\" xcor \"|\" ycor \"|\" zcor \"|\" color \"|\" (item 0 (extract-rgb color)) \"|\" (item 1 (extract-rgb color)) \"|\" (item 2 (extract-rgb color)) \"|\" heading \"|\" pitch \"|\" size \"|\" shape \"|\" label \"|\" label-color \"|\" (item 0 (extract-rgb label-color)) \"|\" (item 1 (extract-rgb label-color)) \"|\" (item 2 (extract-rgb label-color)) \"|\" pen-mode \"|\" pen-size) ] of turtles", "turtles", verboseOutput);
             const linksText = await this.tryReport3DList(session, "[ (word [who] of end1 \"|\" [who] of end2 \"|\" color \"|\" (item 0 (extract-rgb color)) \"|\" (item 1 (extract-rgb color)) \"|\" (item 2 (extract-rgb color)) \"|\" thickness \"|\" (is-directed-link? self) \"|\" shape \"|\" label \"|\" label-color \"|\" (item 0 (extract-rgb label-color)) \"|\" (item 1 (extract-rgb label-color)) \"|\" (item 2 (extract-rgb label-color))) ] of links", "links", verboseOutput);
-            const patchesText = await this.tryReport3DList(session, "[ (word pxcor \"|\" pycor \"|\" pzcor \"|\" pcolor \"|\" (item 0 (extract-rgb pcolor)) \"|\" (item 1 (extract-rgb pcolor)) \"|\" (item 2 (extract-rgb pcolor))) ] of n-of (min (list 5000 count patches with [pcolor != black])) patches with [pcolor != black]", "patches", verboseOutput);
+            const patchesText = await this.tryReport3DList(session, "[ (word pxcor \"|\" pycor \"|\" pzcor \"|\" pcolor \"|\" (item 0 (extract-rgb pcolor)) \"|\" (item 1 (extract-rgb pcolor)) \"|\" (item 2 (extract-rgb pcolor))) ] of sublist (sort patches with [pcolor != black]) 0 (min (list 5000 count patches with [pcolor != black]))", "patches", verboseOutput);
             const observer = await this.tryReportView3DObserver(session, verboseOutput);
-            const drawingLinesText = await this.tryReportDrawing3D(session, verboseOutput);
+            const drawingLinesReport = await this.tryReportDrawing3D(session, verboseOutput);
             return {
                 bounds,
                 observer,
+                turtleCount,
+                linkCount,
+                patchCount,
+                drawingLineCount: drawingLinesReport.totalCount,
+                drawingData: drawingLinesReport.data,
                 turtles: parseNetLogoDelimitedList(turtlesText).map(parseTurtle3DValue).filter((value) => value !== undefined),
                 links: parseNetLogoDelimitedList(linksText).map(parseLink3DValue).filter((value) => value !== undefined),
                 patches: parseNetLogoDelimitedList(patchesText).map(parsePatch3DValue).filter((value) => value !== undefined),
-                drawingLines: parseDrawingLine3DValues(drawingLinesText)
+                drawingLines: []
             };
         }
         catch (error) {
@@ -350,21 +369,58 @@ class NetLogoRunner {
         }
     }
     async tryReportDrawing3D(session, verboseOutput) {
+        const exportDir = path.join(this.context.globalStorageUri.fsPath, "drawing-3d-exports");
+        fs.mkdirSync(exportDir, { recursive: true });
+        const exportPath = path.join(exportDir, `drawing-3d-${Date.now()}-${Math.random().toString(16).slice(2)}.bin`);
         try {
-            return await session.reportDrawing3D();
+            await session.exportDrawing3DBinary(exportPath);
+            const data = fs.readFileSync(exportPath);
+            return {
+                data: exactArrayBuffer(data),
+                totalCount: parseDrawing3DBinaryCount(data)
+            };
         }
         catch (error) {
             this.logVerbose(verboseOutput, `3D drawing report failed: ${formatNetLogoErrorMessage(error)}`);
-            return "";
+            return { data: undefined, totalCount: undefined };
+        }
+        finally {
+            try {
+                fs.unlinkSync(exportPath);
+            }
+            catch {
+                // Drawing exports are temporary; a failed cleanup should not hide the real result.
+            }
         }
     }
     async tryReport3DList(session, reporter, label, verboseOutput) {
+        const exportDir = path.join(this.context.globalStorageUri.fsPath, "report-3d-exports");
+        fs.mkdirSync(exportDir, { recursive: true });
+        const exportPath = path.join(exportDir, `${label}-3d-${Date.now()}-${Math.random().toString(16).slice(2)}.txt`);
         try {
-            return await session.report(reporter, { showError: false });
+            await session.exportReport(reporter, exportPath);
+            return readTextFile(exportPath) ?? "[]";
         }
         catch (error) {
             this.logVerbose(verboseOutput, `3D ${label} report failed: ${formatNetLogoErrorMessage(error)}`);
             return "[]";
+        }
+        finally {
+            try {
+                fs.unlinkSync(exportPath);
+            }
+            catch {
+                // 3D report exports are temporary; a failed cleanup should not hide the real result.
+            }
+        }
+    }
+    async tryReport3DCount(session, reporter, label, verboseOutput) {
+        try {
+            return parseCount(await session.report(reporter, { showError: false }));
+        }
+        catch (error) {
+            this.logVerbose(verboseOutput, `3D ${label} count failed: ${formatNetLogoErrorMessage(error)}`);
+            return undefined;
         }
     }
     async tryExportPlot(session, plot) {
@@ -464,8 +520,23 @@ class NetLogoSession {
         this.commandChain = next.then(() => undefined);
         return next;
     }
+    async exportReport(reporter, filePath) {
+        const next = this.commandChain.catch(() => undefined).then(() => this.exportReportNow(reporter, filePath));
+        this.commandChain = next.then(() => undefined);
+        return next;
+    }
     async reportDrawing3D() {
         const next = this.commandChain.catch(() => undefined).then(() => this.reportDrawing3DNow());
+        this.commandChain = next.then(() => undefined);
+        return next;
+    }
+    async exportDrawing3D(filePath, maxLines) {
+        const next = this.commandChain.catch(() => undefined).then(() => this.exportDrawing3DNow(filePath, maxLines));
+        this.commandChain = next.then(() => undefined);
+        return next;
+    }
+    async exportDrawing3DBinary(filePath) {
+        const next = this.commandChain.catch(() => undefined).then(() => this.exportDrawing3DBinaryNow(filePath));
         this.commandChain = next.then(() => undefined);
         return next;
     }
@@ -546,6 +617,22 @@ class NetLogoSession {
             });
         });
     }
+    async exportReportNow(reporter, filePath) {
+        if (this.isDisposed) {
+            throw new Error("NetLogo session is already closed.");
+        }
+        await this.ready;
+        this.logVerbose(`netlogo:export-report> ${reporter}`);
+        return this.createPending("report export", () => {
+            const encodedReporter = Buffer.from(reporter, "utf8").toString("base64");
+            const encodedPath = Buffer.from(filePath, "utf8").toString("base64");
+            this.child.stdin.write(`EXPORT_REPORT ${encodedReporter} ${encodedPath}\n`, "utf8", error => {
+                if (error) {
+                    this.failPending(error);
+                }
+            });
+        }, Math.max(this.commandTimeoutMs, 5 * 60000));
+    }
     async reportDrawing3DNow() {
         if (this.isDisposed) {
             throw new Error("NetLogo session is already closed.");
@@ -559,6 +646,37 @@ class NetLogoSession {
                 }
             });
         });
+    }
+    async exportDrawing3DNow(filePath, maxLines) {
+        if (this.isDisposed) {
+            throw new Error("NetLogo session is already closed.");
+        }
+        await this.ready;
+        this.logVerbose("netlogo:export-drawing-3d>");
+        return this.createPending("3D drawing export", () => {
+            const encodedPath = Buffer.from(filePath, "utf8").toString("base64");
+            const lineLimit = Math.max(1, Math.floor(Number(maxLines) || DRAWING_3D_RENDER_LIMIT));
+            this.child.stdin.write(`EXPORT_DRAWING_3D ${encodedPath} ${lineLimit}\n`, "utf8", error => {
+                if (error) {
+                    this.failPending(error);
+                }
+            });
+        }, Math.max(this.commandTimeoutMs, 5 * 60000));
+    }
+    async exportDrawing3DBinaryNow(filePath) {
+        if (this.isDisposed) {
+            throw new Error("NetLogo session is already closed.");
+        }
+        await this.ready;
+        this.logVerbose("netlogo:export-drawing-3d-binary>");
+        return this.createPending("binary 3D drawing export", () => {
+            const encodedPath = Buffer.from(filePath, "utf8").toString("base64");
+            this.child.stdin.write(`EXPORT_DRAWING_3D_BINARY ${encodedPath}\n`, "utf8", error => {
+                if (error) {
+                    this.failPending(error);
+                }
+            });
+        }, Math.max(this.commandTimeoutMs, 5 * 60000));
     }
     handleStdout(text) {
         this.stdoutBuffer += text;
@@ -627,13 +745,13 @@ class NetLogoSession {
         this.pending?.resolve(value);
         this.pending = undefined;
     }
-    createPending(label, write) {
+    createPending(label, write, timeoutMs = this.commandTimeoutMs) {
         return new Promise((resolve, reject) => {
             const timer = setTimeout(() => {
-                const error = new Error(`NetLogo ${label} timed out after ${formatDuration(this.commandTimeoutMs)}.`);
+                const error = new Error(`NetLogo ${label} timed out after ${formatDuration(timeoutMs)}.`);
                 this.failPending(error);
                 this.dispose();
-            }, this.commandTimeoutMs);
+            }, timeoutMs);
             const complete = (value) => {
                 clearTimeout(timer);
                 resolve(value);
@@ -697,6 +815,10 @@ function parseNetLogoNumberList(value) {
         .map(part => Number(part))
         .filter(number => Number.isFinite(number));
 }
+function parseCount(value) {
+    const parsed = Number(value.trim());
+    return Number.isFinite(parsed) ? parsed : undefined;
+}
 function parseNetLogoDelimitedList(value) {
     const body = value.trim().replace(/^\[/, "").replace(/\]$/, "").trim();
     if (!body) {
@@ -756,7 +878,7 @@ function parseTurtle3DValue(value) {
     const parts = value.split("|");
     const hasRgb = parts.length >= 17;
     const numericIndexes = hasRgb
-        ? [0, 1, 2, 3, 4, 8, 9, 10]
+        ? [0, 1, 2, 3, 8, 9, 10]
         : [0, 1, 2, 3, 4, 5, 6, 7];
     const numbers = numericIndexes.map(index => Number(parts[index]));
     if (numbers.some(part => !Number.isFinite(part))) {
@@ -769,29 +891,32 @@ function parseTurtle3DValue(value) {
     const penSizeIndex = hasRgb ? 18 : 12;
     const labelColor = Number(parts[labelColorIndex]);
     const penSize = Number(parts[penSizeIndex]);
+    const color = Number(parts[4]);
     return {
         who: numbers[0],
         x: numbers[1],
         y: numbers[2],
         z: numbers[3],
-        color: numbers[4],
+        color: Number.isFinite(color) ? color : undefined,
         colorRgb: hasRgb ? parseRgb3DValue(parts, 5) : undefined,
-        heading: numbers[5],
-        pitch: numbers[6],
-        size: numbers[7],
+        alpha: parseNetLogoColorAlpha(parts[4]),
+        heading: numbers[hasRgb ? 4 : 5],
+        pitch: numbers[hasRgb ? 5 : 6],
+        size: numbers[hasRgb ? 6 : 7],
         penMode: parts[penModeIndex]?.trim() || undefined,
         penSize: Number.isFinite(penSize) ? penSize : undefined,
         shape: parts[shapeIndex]?.trim() || undefined,
         label: parts[labelIndex] ?? "",
         labelColor: Number.isFinite(labelColor) ? labelColor : undefined,
-        labelColorRgb: hasRgb ? parseRgb3DValue(parts, 14) : undefined
+        labelColorRgb: hasRgb ? parseRgb3DValue(parts, 14) : undefined,
+        labelAlpha: parseNetLogoColorAlpha(parts[labelColorIndex])
     };
 }
 function parseLink3DValue(value) {
     const parts = value.split("|");
     const hasRgb = parts.length >= 14;
     const numericIndexes = hasRgb
-        ? [0, 1, 2, 6]
+        ? [0, 1, 6]
         : [0, 1, 2, 3];
     const numbers = numericIndexes.map(index => Number(parts[index]));
     if (numbers.some(part => !Number.isFinite(part))) {
@@ -802,47 +927,82 @@ function parseLink3DValue(value) {
     const labelIndex = hasRgb ? 9 : 6;
     const labelColorIndex = hasRgb ? 10 : 7;
     const labelColor = Number(parts[labelColorIndex]);
+    const color = Number(parts[2]);
     return {
         end1: numbers[0],
         end2: numbers[1],
-        color: numbers[2],
+        color: Number.isFinite(color) ? color : undefined,
         colorRgb: hasRgb ? parseRgb3DValue(parts, 3) : undefined,
-        thickness: numbers[3],
+        alpha: parseNetLogoColorAlpha(parts[2]),
+        thickness: numbers[hasRgb ? 2 : 3],
         directed: /^(?:true|1)$/i.test(parts[directedIndex] ?? ""),
         shape: parts[shapeIndex]?.trim() || undefined,
         label: parts[labelIndex] ?? "",
         labelColor: Number.isFinite(labelColor) ? labelColor : undefined,
-        labelColorRgb: hasRgb ? parseRgb3DValue(parts, 11) : undefined
+        labelColorRgb: hasRgb ? parseRgb3DValue(parts, 11) : undefined,
+        labelAlpha: parseNetLogoColorAlpha(parts[labelColorIndex])
     };
 }
 function parsePatch3DValue(value) {
     const parts = value.split("|");
-    const numbers = parts.slice(0, 4).map(part => Number(part));
-    if (numbers.length < 4 || numbers.some(part => !Number.isFinite(part))) {
+    const hasRgb = parts.length >= 7;
+    const numbers = parts.slice(0, hasRgb ? 3 : 4).map(part => Number(part));
+    if (numbers.length < (hasRgb ? 3 : 4) || numbers.some(part => !Number.isFinite(part))) {
         return undefined;
     }
+    const color = Number(parts[3]);
     return {
         x: numbers[0],
         y: numbers[1],
         z: numbers[2],
-        color: numbers[3],
-        colorRgb: parseRgb3DValue(parts, 4)
+        color: Number.isFinite(color) ? color : undefined,
+        colorRgb: parseRgb3DValue(parts, 4),
+        alpha: parseNetLogoColorAlpha(parts[3])
     };
 }
 function parseDrawingLine3DValues(value) {
     return value
         .split(/\r?\n/)
         .map(line => line.trim())
-        .filter(Boolean)
+        .filter(line => Boolean(line) && !line.startsWith("#"))
         .map(parseDrawingLine3DValue)
         .filter((line) => line !== undefined);
 }
+function parseDrawingLine3DCount(value) {
+    const firstLine = value.split(/\r?\n/, 1)[0]?.trim() ?? "";
+    const match = firstLine.match(/^#\s*count=(\d+)/);
+    if (!match) {
+        return undefined;
+    }
+    return parseCount(match[1]);
+}
+function parseDrawing3DBinaryCount(value) {
+    const metadata = parseDrawing3DBinaryMetadata(value);
+    return metadata?.originalCount;
+}
+function parseDrawing3DBinaryMetadata(value) {
+    if (value.length < 16 || value.readUInt32BE(0) !== 0x4e4c4433) {
+        return undefined;
+    }
+    const version = value.readUInt32BE(4);
+    const originalCount = value.readUInt32BE(8);
+    const recordCount = version === 1 ? originalCount : value.length >= 20 ? value.readUInt32BE(12) : 0;
+    const recordSize = version === 1 ? value.readUInt32BE(12) : value.length >= 20 ? value.readUInt32BE(16) : 0;
+    const headerSize = version === 1 ? 16 : 20;
+    if ((version !== 1 && version !== 2) || recordSize !== 32 || value.length < headerSize + recordCount * recordSize) {
+        return undefined;
+    }
+    return { originalCount, recordCount, recordSize };
+}
 function parseDrawingLine3DValue(value) {
     const parts = value.split("|");
-    const numbers = [0, 1, 2, 3, 4, 5, 6, 7].map(index => Number(parts[index]));
+    const hasRgb = parts.length >= 11;
+    const requiredIndexes = hasRgb ? [0, 1, 2, 3, 4, 5, 6] : [0, 1, 2, 3, 4, 5, 6, 7];
+    const numbers = requiredIndexes.map(index => Number(parts[index]));
     if (numbers.some(part => !Number.isFinite(part))) {
         return undefined;
     }
+    const color = Number(parts[7]);
     return {
         x0: numbers[0],
         y0: numbers[1],
@@ -851,8 +1011,9 @@ function parseDrawingLine3DValue(value) {
         y1: numbers[4],
         z1: numbers[5],
         width: numbers[6],
-        color: numbers[7],
+        color: Number.isFinite(color) ? color : undefined,
         colorRgb: parseRgb3DValue(parts, 8),
+        alpha: parseNetLogoColorAlpha(parts[7]),
         heading: parseOptionalNumber(parts[11]),
         pitch: parseOptionalNumber(parts[12]),
         length: parseOptionalNumber(parts[13])
@@ -876,8 +1037,21 @@ function parseRgb3DValue(parts, start) {
         blue: clampRgbChannel(channels[2])
     };
 }
+function parseNetLogoColorAlpha(value) {
+    const text = String(value ?? "").trim();
+    if (!text) {
+        return undefined;
+    }
+    if (!text.startsWith("[")) {
+        return 255;
+    }
+    const channels = text.slice(1, -1).trim().split(/[\s,]+/).map(Number);
+    return channels.length >= 4 && Number.isFinite(channels[3])
+        ? clampRgbChannel(channels[3])
+        : 255;
+}
 function clampRgbChannel(value) {
-    return Math.min(255, Math.max(0, Math.round(value)));
+    return Math.min(255, Math.max(0, Math.trunc(value)));
 }
 function isNetLogoPath(filePath) {
     const lower = filePath.toLowerCase();
@@ -914,6 +1088,23 @@ function isFresh(targetPath, sourcePath) {
     catch {
         return false;
     }
+}
+function fileSha256(filePath) {
+    return (0, crypto_1.createHash)("sha256").update(fs.readFileSync(filePath)).digest("hex");
+}
+function readTextFile(filePath) {
+    try {
+        return fs.readFileSync(filePath, "utf8").trim();
+    }
+    catch {
+        return undefined;
+    }
+}
+function exactArrayBuffer(value) {
+    if (value.byteOffset === 0 && value.byteLength === value.buffer.byteLength && value.buffer instanceof ArrayBuffer) {
+        return value.buffer;
+    }
+    return value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength);
 }
 function quoteForLog(value) {
     return /\s/.test(value) ? JSON.stringify(value) : value;

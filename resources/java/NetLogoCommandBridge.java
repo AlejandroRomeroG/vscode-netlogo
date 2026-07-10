@@ -1,7 +1,10 @@
 import org.nlogo.headless.HeadlessWorkspace;
 
 import java.io.BufferedReader;
+import java.io.BufferedOutputStream;
+import java.io.BufferedWriter;
 import java.io.ByteArrayOutputStream;
+import java.io.DataOutputStream;
 import java.io.InputStreamReader;
 import java.io.PrintStream;
 import java.awt.Color;
@@ -21,6 +24,9 @@ public final class NetLogoCommandBridge {
   private static final String VIEW = "__NETLOGO_VIEW__";
   private static final String PLOT = "__NETLOGO_PLOT__";
   private static final String DRAWING_3D = "__NETLOGO_DRAWING_3D__";
+  private static final int DRAWING_3D_BINARY_MAGIC = 0x4e4c4433; // NLD3
+  private static final int DRAWING_3D_BINARY_VERSION = 2;
+  private static final int DRAWING_3D_BINARY_RECORD_SIZE = 32;
 
   private NetLogoCommandBridge() {
   }
@@ -164,8 +170,27 @@ public final class NetLogoCommandBridge {
           String path = decodePayload(parts[1]);
           byte[] bytes = exportPlot(workspace, plotName, path);
           System.out.println(PLOT + Base64.getEncoder().encodeToString(bytes));
+        } else if (line.startsWith("EXPORT_REPORT ")) {
+          String[] parts = line.substring("EXPORT_REPORT ".length()).split(" ", 2);
+          if (parts.length != 2) {
+            throw new IllegalArgumentException("EXPORT_REPORT requires reporter and path payloads");
+          }
+          String reporter = decodePayload(parts[0]);
+          String path = decodePayload(parts[1]);
+          exportReport(workspace, reporter, path);
+          System.out.println(OK);
         } else if ("DRAWING_3D".equals(line)) {
           System.out.println(DRAWING_3D + encodePayload(exportDrawing3D(workspace)));
+        } else if (line.startsWith("EXPORT_DRAWING_3D_BINARY ")) {
+          String path = decodePayload(line.substring("EXPORT_DRAWING_3D_BINARY ".length()));
+          exportDrawing3DBinary(workspace, path);
+          System.out.println(OK);
+        } else if (line.startsWith("EXPORT_DRAWING_3D ")) {
+          String[] parts = line.substring("EXPORT_DRAWING_3D ".length()).split(" ", 2);
+          String path = decodePayload(parts[0]);
+          int maxLines = parts.length > 1 ? parsePositiveInt(parts[1], Integer.MAX_VALUE) : Integer.MAX_VALUE;
+          exportDrawing3D(workspace, path, maxLines);
+          System.out.println(OK);
         } else {
           String command = line.startsWith("COMMAND ")
             ? decodePayload(line.substring("COMMAND ".length()))
@@ -198,6 +223,15 @@ public final class NetLogoCommandBridge {
 
   private static String encodePayload(String value) {
     return Base64.getEncoder().encodeToString(value.getBytes(StandardCharsets.UTF_8));
+  }
+
+  private static int parsePositiveInt(String value, int fallback) {
+    try {
+      int parsed = Integer.parseInt(value.trim());
+      return parsed > 0 ? parsed : fallback;
+    } catch (Exception ignored) {
+      return fallback;
+    }
   }
 
   private static byte[] exportView(HeadlessWorkspace workspace, String path) throws Throwable {
@@ -234,6 +268,14 @@ public final class NetLogoCommandBridge {
     }
   }
 
+  private static void exportReport(HeadlessWorkspace workspace, String reporter, String path) throws Throwable {
+    Path exportPath = Paths.get(path);
+    try (BufferedWriter writer = Files.newBufferedWriter(exportPath, StandardCharsets.UTF_8)) {
+      Object value = workspace.report(reporter);
+      writer.append(String.valueOf(value));
+    }
+  }
+
   private static String exportDrawing3D(HeadlessWorkspace workspace) throws Throwable {
     Object world = workspace.world();
     Method getDrawing = world.getClass().getMethod("getDrawing");
@@ -262,6 +304,223 @@ public final class NetLogoCommandBridge {
         .append(line.length()).append('\n');
     }
     return output.toString();
+  }
+
+  private static void exportDrawing3D(HeadlessWorkspace workspace, String path, int maxLines) throws Throwable {
+    Object world = workspace.world();
+    Method getDrawing = world.getClass().getMethod("getDrawing");
+    Object drawing = getDrawing.invoke(world);
+    Path exportPath = Paths.get(path);
+    try (BufferedWriter writer = Files.newBufferedWriter(exportPath, StandardCharsets.UTF_8)) {
+      if (!(drawing instanceof org.nlogo.api.Drawing3D)) {
+        writer.append("# count=0\n");
+        return;
+      }
+
+      org.nlogo.api.Drawing3D drawing3D = (org.nlogo.api.Drawing3D) drawing;
+      int totalCount = 0;
+      for (org.nlogo.api.DrawingLine3D ignored : drawing3D.lines()) {
+        totalCount += 1;
+      }
+
+      writer.append("# count=").append(String.valueOf(totalCount)).append('\n');
+      if (totalCount == 0) {
+        return;
+      }
+
+      int stride = totalCount > maxLines ? (int) Math.ceil(totalCount / (double) maxLines) : 1;
+      int index = 0;
+      int written = 0;
+      for (org.nlogo.api.DrawingLine3D line : drawing3D.lines()) {
+        if (stride == 1 || index % stride == 0) {
+          writeDrawingLine3D(writer, line);
+          written += 1;
+          if (written >= maxLines) {
+            break;
+          }
+        }
+        index += 1;
+      }
+    }
+  }
+
+  private static void writeDrawingLine3D(BufferedWriter writer, org.nlogo.api.DrawingLine3D line) throws Throwable {
+    Color color = org.nlogo.api.Color.getColor(line.color());
+    writer
+      .append(String.valueOf(line.x0())).append('|')
+      .append(String.valueOf(line.y0())).append('|')
+      .append(String.valueOf(line.z0())).append('|')
+      .append(String.valueOf(line.x1())).append('|')
+      .append(String.valueOf(line.y1())).append('|')
+      .append(String.valueOf(line.z1())).append('|')
+      .append(String.valueOf(line.width())).append('|')
+      .append(String.valueOf(line.color())).append('|')
+      .append(String.valueOf(color.getRed())).append('|')
+      .append(String.valueOf(color.getGreen())).append('|')
+      .append(String.valueOf(color.getBlue())).append('|')
+      .append(String.valueOf(line.heading())).append('|')
+      .append(String.valueOf(line.pitch())).append('|')
+      .append(String.valueOf(line.length())).append('\n');
+  }
+
+  private static void exportDrawing3DBinary(HeadlessWorkspace workspace, String path) throws Throwable {
+    Object world = workspace.world();
+    Method getDrawing = world.getClass().getMethod("getDrawing");
+    Object drawing = getDrawing.invoke(world);
+    Path exportPath = Paths.get(path);
+
+    org.nlogo.api.Drawing3D drawing3D = drawing instanceof org.nlogo.api.Drawing3D
+      ? (org.nlogo.api.Drawing3D) drawing
+      : null;
+    Drawing3DBinaryStats stats = drawing3D == null
+      ? new Drawing3DBinaryStats(0, 0)
+      : drawing3DBinaryStats(drawing3D);
+
+    // NLD3 v2: magic, version, original line count, compacted record count, record size,
+    // then big-endian records containing 7 float32 values (xyz endpoints + width) and ARGB.
+    try (DataOutputStream output = new DataOutputStream(new BufferedOutputStream(Files.newOutputStream(exportPath)))) {
+      output.writeInt(DRAWING_3D_BINARY_MAGIC);
+      output.writeInt(DRAWING_3D_BINARY_VERSION);
+      output.writeInt(stats.originalCount);
+      output.writeInt(stats.recordCount);
+      output.writeInt(DRAWING_3D_BINARY_RECORD_SIZE);
+      if (drawing3D == null) {
+        return;
+      }
+
+      Drawing3DBinaryRecord pending = null;
+      for (org.nlogo.api.DrawingLine3D line : drawing3D.lines()) {
+        Drawing3DBinaryRecord next = Drawing3DBinaryRecord.from(line);
+        if (pending != null && pending.merge(next)) {
+          continue;
+        }
+        if (pending != null) {
+          pending.write(output);
+        }
+        pending = next;
+      }
+      if (pending != null) {
+        pending.write(output);
+      }
+    }
+  }
+
+  private static Drawing3DBinaryStats drawing3DBinaryStats(org.nlogo.api.Drawing3D drawing3D) throws Throwable {
+    int originalCount = 0;
+    int recordCount = 0;
+    Drawing3DBinaryRecord pending = null;
+    for (org.nlogo.api.DrawingLine3D line : drawing3D.lines()) {
+      originalCount += 1;
+      Drawing3DBinaryRecord next = Drawing3DBinaryRecord.from(line);
+      if (pending != null && pending.merge(next)) {
+        continue;
+      }
+      recordCount += 1;
+      pending = next;
+    }
+    return new Drawing3DBinaryStats(originalCount, recordCount);
+  }
+
+  private static final class Drawing3DBinaryStats {
+    private final int originalCount;
+    private final int recordCount;
+
+    private Drawing3DBinaryStats(int originalCount, int recordCount) {
+      this.originalCount = originalCount;
+      this.recordCount = recordCount;
+    }
+  }
+
+  private static final class Drawing3DBinaryRecord {
+    private static final double POSITION_EPSILON = 1.0e-9;
+    private static final double DIRECTION_EPSILON = 1.0e-9;
+
+    private final double x0;
+    private final double y0;
+    private final double z0;
+    private double x1;
+    private double y1;
+    private double z1;
+    private final double width;
+    private final int argb;
+
+    private Drawing3DBinaryRecord(
+      double x0,
+      double y0,
+      double z0,
+      double x1,
+      double y1,
+      double z1,
+      double width,
+      int argb
+    ) {
+      this.x0 = x0;
+      this.y0 = y0;
+      this.z0 = z0;
+      this.x1 = x1;
+      this.y1 = y1;
+      this.z1 = z1;
+      this.width = width;
+      this.argb = argb;
+    }
+
+    private static Drawing3DBinaryRecord from(org.nlogo.api.DrawingLine3D line) throws Throwable {
+      Color color = org.nlogo.api.Color.getColor(line.color());
+      int argb = (color.getAlpha() << 24) | (color.getRed() << 16) | (color.getGreen() << 8) | color.getBlue();
+      return new Drawing3DBinaryRecord(
+        line.x0(), line.y0(), line.z0(),
+        line.x1(), line.y1(), line.z1(),
+        line.width(), argb
+      );
+    }
+
+    private boolean merge(Drawing3DBinaryRecord next) {
+      if (((argb >>> 24) & 0xff) != 255 || argb != next.argb || Double.compare(width, next.width) != 0
+        || !near(x1, next.x0) || !near(y1, next.y0) || !near(z1, next.z0)) {
+        return false;
+      }
+
+      double dx1 = x1 - x0;
+      double dy1 = y1 - y0;
+      double dz1 = z1 - z0;
+      double dx2 = next.x1 - next.x0;
+      double dy2 = next.y1 - next.y0;
+      double dz2 = next.z1 - next.z0;
+      double length1 = Math.sqrt(dx1 * dx1 + dy1 * dy1 + dz1 * dz1);
+      double length2 = Math.sqrt(dx2 * dx2 + dy2 * dy2 + dz2 * dz2);
+      if (length1 <= POSITION_EPSILON || length2 <= POSITION_EPSILON) {
+        return false;
+      }
+
+      double crossX = dy1 * dz2 - dz1 * dy2;
+      double crossY = dz1 * dx2 - dx1 * dz2;
+      double crossZ = dx1 * dy2 - dy1 * dx2;
+      double crossLength = Math.sqrt(crossX * crossX + crossY * crossY + crossZ * crossZ);
+      double dot = dx1 * dx2 + dy1 * dy2 + dz1 * dz2;
+      if (dot <= 0 || crossLength > DIRECTION_EPSILON * length1 * length2) {
+        return false;
+      }
+
+      x1 = next.x1;
+      y1 = next.y1;
+      z1 = next.z1;
+      return true;
+    }
+
+    private void write(DataOutputStream output) throws Exception {
+      output.writeFloat((float) x0);
+      output.writeFloat((float) y0);
+      output.writeFloat((float) z0);
+      output.writeFloat((float) x1);
+      output.writeFloat((float) y1);
+      output.writeFloat((float) z1);
+      output.writeFloat((float) width);
+      output.writeInt(argb);
+    }
+
+    private static boolean near(double left, double right) {
+      return Math.abs(left - right) <= POSITION_EPSILON;
+    }
   }
 
   private static String quoteNetLogoString(String value) {

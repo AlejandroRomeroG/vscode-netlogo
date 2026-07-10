@@ -166,17 +166,20 @@ class NetLogoModelEditorProvider {
     async runAndPost(webview, resource, command, options) {
         try {
             const result = await this.runner.run(resource, command, options);
-            this.postRuntimeResult(webview, result);
+            await this.postRuntimeResult(webview, result);
         }
         catch (error) {
             this.postRuntimeError(webview, error);
         }
     }
-    postRuntimeResult(webview, result) {
-        void webview.postMessage({
+    async postRuntimeResult(webview, result) {
+        const delivered = await webview.postMessage({
             type: "runtime-result",
             result: result ?? null
         });
+        if (!delivered) {
+            throw new Error("The NetLogo runtime result could not be delivered to the model editor.");
+        }
     }
     postRuntimeError(webview, error) {
         void webview.postMessage({
@@ -976,7 +979,7 @@ class NetLogoModelEditorProvider {
       min-width: 0;
       min-height: 0;
       overflow: hidden;
-      background: #050507;
+      background: #000;
       touch-action: none;
     }
 
@@ -990,7 +993,7 @@ class NetLogoModelEditorProvider {
     .three-view.fullscreen-fallback {
       width: 100vw;
       height: 100vh;
-      background: #050507;
+      background: #000;
     }
 
     .three-view.fullscreen-fallback {
@@ -1709,6 +1712,7 @@ class NetLogoModelEditorProvider {
     const RUN_SPEED_MAX = 10;
     const RUN_SPEED_NORMAL_DELAY_MS = 20;
     const RUN_SPEED_BATCHES = [2, 4, 8, 16, 24, 32, 48, 64, 96, 128];
+    const THREE_INSTANCE_CHUNK_SIZE = 60000;
 
     const state = {
       version: 0,
@@ -3907,6 +3911,9 @@ class NetLogoModelEditorProvider {
       let currentViewState = viewState;
       host.replaceChildren();
       const renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.outputColorSpace = THREE.SRGBColorSpace;
+      renderer.toneMapping = THREE.NoToneMapping;
+      renderer.toneMappingExposure = 1;
       renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
       host.append(renderer.domElement);
 
@@ -4254,23 +4261,40 @@ class NetLogoModelEditorProvider {
     }
 
     function threeStatusText(viewState) {
-      const parts = [viewState.turtles.length + " turtles"];
-      if (viewState.links.length) {
-        parts.push(viewState.links.length + " links");
+      const turtleCount = displayThreeCoverage(viewState.turtleCount, viewState.turtles.length);
+      const linkCount = displayThreeCoverage(viewState.linkCount, viewState.links.length);
+      const patchCount = displayThreeCoverage(viewState.patchCount, viewState.patches?.length ?? 0);
+      const drawingLineCount = displayThreeCount(viewState.drawingLineCount, viewState.drawingLines?.length ?? 0);
+      const parts = [turtleCount + " turtles"];
+      if (linkCount !== "0") {
+        parts.push(linkCount + " links");
       }
-      if (viewState.patches?.length) {
-        parts.push(viewState.patches.length + " patches");
+      if (patchCount !== "0") {
+        parts.push(patchCount + " patches");
       }
-      if (viewState.drawingLines?.length) {
-        parts.push(viewState.drawingLines.length + " trails");
+      if (drawingLineCount !== "0") {
+        parts.push(drawingLineCount + " trails");
       }
       return parts.join(" · ");
+    }
+
+    function displayThreeCoverage(total, rendered) {
+      const numericTotal = Number(total);
+      return Number.isFinite(numericTotal) && numericTotal > rendered
+        ? displayThreeCount(rendered, rendered) + " / " + displayThreeCount(numericTotal, rendered)
+        : displayThreeCount(total, rendered);
+    }
+
+    function displayThreeCount(total, rendered) {
+      const numericTotal = Number(total);
+      const count = Number.isFinite(numericTotal) ? numericTotal : rendered;
+      return new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }).format(count);
     }
 
     function threeTheme() {
       return state.threeBackground === "light"
         ? { background: 0xf7f7f4, box: 0xb8bcc6 }
-        : { background: 0x050507, box: 0x8f929a };
+        : { background: 0x000000, box: 0x8f929a };
     }
 
     function cameraPose(pose, span, baseTarget) {
@@ -4382,12 +4406,12 @@ class NetLogoModelEditorProvider {
     }
 
     function addThreeLights(scene, THREE) {
-      scene.add(new THREE.AmbientLight(0xffffff, 0.65));
-      const keyLight = new THREE.DirectionalLight(0xffffff, 0.85);
-      keyLight.position.set(0.45, 1.0, 0.75);
+      scene.add(new THREE.AmbientLight(0xffffff, 0.7));
+      const keyLight = new THREE.DirectionalLight(0xffffff, 0.35);
+      keyLight.position.set(-1, 0.4, -0.3);
       scene.add(keyLight);
-      const fillLight = new THREE.DirectionalLight(0xffffff, 0.25);
-      fillLight.position.set(-0.8, 0.35, -0.4);
+      const fillLight = new THREE.DirectionalLight(0xffffff, 0.35);
+      fillLight.position.set(1, -0.5, 0.6);
       scene.add(fillLight);
     }
 
@@ -4400,8 +4424,9 @@ class NetLogoModelEditorProvider {
       for (const turtle of turtles) {
         const geometryKey = turtleGeometryKey(turtle.shape);
         const color = threeColorHex(turtle);
-        const key = geometryKey + "|" + color;
-        const group = groups.get(key) ?? { geometryKey, color, items: [] };
+        const opacity = threeOpacity(turtle);
+        const key = geometryKey + "|" + color + "|" + opacity;
+        const group = groups.get(key) ?? { geometryKey, color, opacity, items: [] };
         group.items.push(turtle);
         groups.set(key, group);
       }
@@ -4410,32 +4435,74 @@ class NetLogoModelEditorProvider {
       const matrix = new THREE.Matrix4();
 
       for (const group of groups.values()) {
+        if (group.geometryKey === "line") {
+          addThreeLineTurtleGroup(scene, THREE, group, pickables);
+          continue;
+        }
         const geometry = turtleGeometryForKey(THREE, group.geometryKey);
         const material = new THREE.MeshLambertMaterial({
           color: group.color,
-          side: THREE.DoubleSide
+          side: THREE.DoubleSide,
+          transparent: group.opacity < 1,
+          opacity: group.opacity,
+          depthWrite: group.opacity >= 1
         });
-        const mesh = new THREE.InstancedMesh(geometry, material, group.items.length);
-        mesh.userData = { kind: "turtle", items: group.items };
+        forEachThreeChunk(group.items, THREE_INSTANCE_CHUNK_SIZE, chunk => {
+          const mesh = new THREE.InstancedMesh(geometry, material, chunk.length);
+          mesh.userData = { kind: "turtle", items: chunk };
 
-        group.items.forEach((turtle, index) => {
-          const rawSize = Number(turtle.size);
-          const size = Number.isFinite(rawSize) && rawSize > 0 ? Math.max(0.01, rawSize) : 1;
-          const position = netLogoVector(THREE, turtle.x, turtle.y, turtle.z);
-          const direction = turtleDirection(THREE, turtle.heading, turtle.pitch);
-          const quaternion = group.geometryKey === "sphere"
-            ? new THREE.Quaternion()
-            : new THREE.Quaternion().setFromUnitVectors(baseDirection, direction);
-          const scale = group.geometryKey === "line"
-            ? new THREE.Vector3(size * 0.35, size * 1.2, size * 0.35)
-            : new THREE.Vector3(size, size, size);
-          matrix.compose(position, quaternion, scale);
-          mesh.setMatrixAt(index, matrix);
+          chunk.forEach((turtle, index) => {
+            const rawSize = Number(turtle.size);
+            const size = Number.isFinite(rawSize) && rawSize > 0 ? Math.max(0.01, rawSize) : 1;
+            const position = netLogoVector(THREE, turtle.x, turtle.y, turtle.z);
+            const direction = turtleDirection(THREE, turtle.heading, turtle.pitch);
+            const quaternion = group.geometryKey === "sphere"
+              ? new THREE.Quaternion()
+              : new THREE.Quaternion().setFromUnitVectors(baseDirection, direction);
+            const scale = new THREE.Vector3(size, size, size);
+            matrix.compose(position, quaternion, scale);
+            mesh.setMatrixAt(index, matrix);
+          });
+          mesh.instanceMatrix.needsUpdate = true;
+          scene.add(mesh);
+          pickables.push(mesh);
         });
-        mesh.instanceMatrix.needsUpdate = true;
-        scene.add(mesh);
-        pickables.push(mesh);
       }
+    }
+
+    function addThreeLineTurtleGroup(scene, THREE, group, pickables) {
+      const positions = new Float32Array(group.items.length * 6);
+      const position = new THREE.Vector3();
+      const endpoint = new THREE.Vector3();
+      let cursor = 0;
+
+      for (const turtle of group.items) {
+        const rawSize = Number(turtle.size);
+        const halfLength = (Number.isFinite(rawSize) && rawSize > 0 ? Math.max(0.01, rawSize) : 1) * 0.5;
+        position.copy(netLogoVector(THREE, turtle.x, turtle.y, turtle.z));
+        const direction = turtleDirection(THREE, turtle.heading, turtle.pitch).multiplyScalar(halfLength);
+        endpoint.copy(position).sub(direction);
+        positions[cursor++] = endpoint.x;
+        positions[cursor++] = endpoint.y;
+        positions[cursor++] = endpoint.z;
+        endpoint.copy(position).add(direction);
+        positions[cursor++] = endpoint.x;
+        positions[cursor++] = endpoint.y;
+        positions[cursor++] = endpoint.z;
+      }
+
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+      const material = new THREE.LineBasicMaterial({
+        color: group.color,
+        transparent: group.opacity < 1,
+        opacity: group.opacity,
+        depthWrite: group.opacity >= 1
+      });
+      const lines = new THREE.LineSegments(geometry, material);
+      lines.userData = { kind: "turtle", items: group.items, lineItems: true };
+      scene.add(lines);
+      pickables.push(lines);
     }
 
     function turtleGeometryKey(shape) {
@@ -4446,8 +4513,11 @@ class NetLogoModelEditorProvider {
       if (["box", "cube", "square"].includes(normalized)) {
         return "box";
       }
-      if (["line", "cylinder"].includes(normalized)) {
+      if (normalized === "line") {
         return "line";
+      }
+      if (normalized === "cylinder") {
+        return "cylinder";
       }
       return "cone";
     }
@@ -4458,7 +4528,7 @@ class NetLogoModelEditorProvider {
           return new THREE.SphereGeometry(0.42, 16, 12);
         case "box":
           return new THREE.BoxGeometry(0.78, 0.78, 0.78);
-        case "line":
+        case "cylinder":
           return new THREE.CylinderGeometry(0.08, 0.08, 0.95, 8);
         default:
           return new THREE.ConeGeometry(0.28, 0.9, 12);
@@ -4473,25 +4543,40 @@ class NetLogoModelEditorProvider {
       const groups = new Map();
       for (const patch of patches) {
         const color = threeColorHex(patch);
-        const group = groups.get(color) ?? { color, items: [] };
+        const opacity = threeOpacity(patch);
+        const key = color + "|" + opacity;
+        const group = groups.get(key) ?? { color, opacity, items: [] };
         group.items.push(patch);
-        groups.set(color, group);
+        groups.set(key, group);
       }
 
       const matrix = new THREE.Matrix4();
 
       for (const group of groups.values()) {
         const geometry = new THREE.BoxGeometry(1, 1, 1);
-        const material = new THREE.MeshBasicMaterial({ color: group.color });
-        const mesh = new THREE.InstancedMesh(geometry, material, group.items.length);
-        group.items.forEach((patch, index) => {
-          matrix.makeTranslation(Number(patch.x) || 0, Number(patch.z) || 0, Number(patch.y) || 0);
-          mesh.setMatrixAt(index, matrix);
+        const material = new THREE.MeshLambertMaterial({
+          color: group.color,
+          transparent: group.opacity < 1,
+          opacity: group.opacity,
+          depthWrite: group.opacity >= 1
         });
-        mesh.instanceMatrix.needsUpdate = true;
-        mesh.userData = { kind: "patch", items: group.items };
-        scene.add(mesh);
-        pickables.push(mesh);
+        forEachThreeChunk(group.items, THREE_INSTANCE_CHUNK_SIZE, chunk => {
+          const mesh = new THREE.InstancedMesh(geometry, material, chunk.length);
+          chunk.forEach((patch, index) => {
+            matrix.makeTranslation(Number(patch.x) || 0, Number(patch.z) || 0, Number(patch.y) || 0);
+            mesh.setMatrixAt(index, matrix);
+          });
+          mesh.instanceMatrix.needsUpdate = true;
+          mesh.userData = { kind: "patch", items: chunk };
+          scene.add(mesh);
+          pickables.push(mesh);
+        });
+      }
+    }
+
+    function forEachThreeChunk(items, size, visit) {
+      for (let start = 0; start < items.length; start += size) {
+        visit(items.slice(start, start + size));
       }
     }
 
@@ -4513,7 +4598,14 @@ class NetLogoModelEditorProvider {
         }
 
         const color = threeColorHex(link);
-        const material = new THREE.LineBasicMaterial({ color, linewidth: Math.max(1, link.thickness || 1) });
+        const opacity = threeOpacity(link);
+        const material = new THREE.LineBasicMaterial({
+          color,
+          linewidth: Math.max(1, link.thickness || 1),
+          transparent: opacity < 1,
+          opacity,
+          depthWrite: opacity >= 1
+        });
         const start = netLogoVector(THREE, end1.x, end1.y, end1.z);
         const end = netLogoVector(THREE, end2.x, end2.y, end2.z);
         const geometry = new THREE.BufferGeometry().setFromPoints([
@@ -4526,12 +4618,12 @@ class NetLogoModelEditorProvider {
         pickables.push(line);
 
         if (link.directed) {
-          addThreeLinkArrow(scene, THREE, start, end, color, Math.max(0.45, link.thickness || 1));
+          addThreeLinkArrow(scene, THREE, start, end, color, opacity, Math.max(0.45, link.thickness || 1));
         }
       }
     }
 
-    function addThreeLinkArrow(scene, THREE, start, end, color, size) {
+    function addThreeLinkArrow(scene, THREE, start, end, color, opacity, size) {
       const direction = new THREE.Vector3().subVectors(end, start);
       const length = direction.length();
       if (length <= 0.001) {
@@ -4541,7 +4633,13 @@ class NetLogoModelEditorProvider {
       direction.normalize();
       const position = end.clone().addScaledVector(direction, -Math.min(0.45, length * 0.22));
       const geometry = new THREE.ConeGeometry(0.16 * size, 0.42 * size, 10);
-      const material = new THREE.MeshLambertMaterial({ color, side: THREE.DoubleSide });
+      const material = new THREE.MeshLambertMaterial({
+        color,
+        side: THREE.DoubleSide,
+        transparent: opacity < 1,
+        opacity,
+        depthWrite: opacity >= 1
+      });
       const arrow = new THREE.Mesh(geometry, material);
       arrow.position.copy(position);
       arrow.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction);
@@ -4555,7 +4653,13 @@ class NetLogoModelEditorProvider {
         }
         const position = netLogoVector(THREE, turtle.x, turtle.y, turtle.z);
         position.y += Math.max(0.7, Number(turtle.size) || 1);
-        scene.add(threeTextSprite(THREE, String(turtle.label), threeColorHex(turtle, "labelColor", "labelColorRgb"), position));
+        scene.add(threeTextSprite(
+          THREE,
+          String(turtle.label),
+          threeColorHex(turtle, "labelColor", "labelColorRgb"),
+          threeOpacity(turtle, "labelAlpha"),
+          position
+        ));
       }
 
       if (!links.length) {
@@ -4579,7 +4683,13 @@ class NetLogoModelEditorProvider {
         const end = netLogoVector(THREE, end2.x, end2.y, end2.z);
         const position = start.clone().lerp(end, 0.5);
         position.y += 0.35;
-        scene.add(threeTextSprite(THREE, String(link.label), threeColorHex(link, "labelColor", "labelColorRgb"), position));
+        scene.add(threeTextSprite(
+          THREE,
+          String(link.label),
+          threeColorHex(link, "labelColor", "labelColorRgb"),
+          threeOpacity(link, "labelAlpha"),
+          position
+        ));
       }
     }
 
@@ -4607,6 +4717,14 @@ class NetLogoModelEditorProvider {
     }
 
     function updateThreePenTrails(layer, THREE, trailState, viewState) {
+      const drawingData = viewState.drawingData;
+      if (drawingData && renderThreePackedTrailSegments(layer, THREE, drawingData)) {
+        trailState.previous = new Map();
+        trailState.source = "drawing-packed";
+        trailState.segments = [];
+        return;
+      }
+
       const drawingLines = Array.isArray(viewState.drawingLines) ? viewState.drawingLines : [];
       if (drawingLines.length) {
         trailState.previous = new Map();
@@ -4616,7 +4734,7 @@ class NetLogoModelEditorProvider {
         return;
       }
 
-      if (trailState.source === "drawing") {
+      if (trailState.source === "drawing" || trailState.source === "drawing-packed") {
         clearThreeTrailState(layer, trailState);
       }
       trailState.source = "turtle";
@@ -4647,7 +4765,8 @@ class NetLogoModelEditorProvider {
             trailState.segments.push({
               start: previous.point,
               end: point,
-              color: threeColorHex(turtle)
+              color: threeColorHex(turtle),
+              opacity: threeOpacity(turtle)
             });
           }
         } else if (!previous && penDown) {
@@ -4656,7 +4775,8 @@ class NetLogoModelEditorProvider {
             trailState.segments.push({
               start: parent.point,
               end: point,
-              color: threeColorHex(turtle)
+              color: threeColorHex(turtle),
+              opacity: threeOpacity(turtle)
             });
           }
         }
@@ -4668,6 +4788,120 @@ class NetLogoModelEditorProvider {
         trailState.segments.splice(0, trailState.segments.length - trailState.maxSegments);
       }
       renderThreeTrailSegments(layer, THREE, trailState.segments);
+    }
+
+    function renderThreePackedTrailSegments(layer, THREE, data) {
+      geometryDispose(layer);
+      layer.clear();
+
+      const bytes = threeDrawingBytes(data);
+      if (!bytes) {
+        return false;
+      }
+
+      if (bytes.byteLength < 16) {
+        return false;
+      }
+      const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      const magic = view.getUint32(0, false);
+      const version = view.getUint32(4, false);
+      const headerSize = version === 1 ? 16 : 20;
+      const count = version === 1 ? view.getUint32(8, false) : bytes.byteLength >= 20 ? view.getUint32(12, false) : 0;
+      const recordSize = version === 1 ? view.getUint32(12, false) : bytes.byteLength >= 20 ? view.getUint32(16, false) : 0;
+      if (magic !== 0x4e4c4433 || ![1, 2].includes(version) || recordSize !== 32 || bytes.byteLength < headerSize + count * recordSize) {
+        return false;
+      }
+
+      const batches = [];
+      for (let index = 0; index < count; index += 1) {
+        const offset = headerSize + index * recordSize;
+        const width = normalizedThreeLineWidth(view.getFloat32(offset + 24, false));
+        const alpha = view.getUint8(offset + 28);
+        const previous = batches[batches.length - 1];
+        if (previous && previous.width === width && previous.alpha === alpha) {
+          previous.count += 1;
+        } else {
+          batches.push({ start: index, count: 1, width, alpha });
+        }
+      }
+
+      const linearColor = new Uint16Array(256);
+      for (let channel = 0; channel < linearColor.length; channel += 1) {
+        const srgb = channel / 255;
+        const linear = srgb <= 0.04045
+          ? srgb / 12.92
+          : Math.pow((srgb + 0.055) / 1.055, 2.4);
+        linearColor[channel] = Math.round(linear * 65535);
+      }
+
+      batches.forEach((batch, batchIndex) => {
+        const positions = new Float32Array(batch.count * 6);
+        const colors = new Uint16Array(batch.count * 6);
+        let positionCursor = 0;
+        let colorCursor = 0;
+        for (let index = batch.start; index < batch.start + batch.count; index += 1) {
+          const offset = headerSize + index * recordSize;
+          positions[positionCursor++] = view.getFloat32(offset, false);
+          positions[positionCursor++] = view.getFloat32(offset + 8, false);
+          positions[positionCursor++] = view.getFloat32(offset + 4, false);
+          positions[positionCursor++] = view.getFloat32(offset + 12, false);
+          positions[positionCursor++] = view.getFloat32(offset + 20, false);
+          positions[positionCursor++] = view.getFloat32(offset + 16, false);
+          const red = linearColor[view.getUint8(offset + 29)];
+          const green = linearColor[view.getUint8(offset + 30)];
+          const blue = linearColor[view.getUint8(offset + 31)];
+          colors[colorCursor++] = red;
+          colors[colorCursor++] = green;
+          colors[colorCursor++] = blue;
+          colors[colorCursor++] = red;
+          colors[colorCursor++] = green;
+          colors[colorCursor++] = blue;
+        }
+
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+        geometry.setAttribute("color", new THREE.Uint16BufferAttribute(colors, 3, true));
+        const opacity = batch.alpha / 255;
+        const material = new THREE.LineBasicMaterial({
+          color: 0xffffff,
+          vertexColors: true,
+          linewidth: batch.width,
+          transparent: opacity < 1,
+          opacity,
+          depthWrite: opacity >= 1
+        });
+        const lines = new THREE.LineSegments(geometry, material);
+        lines.renderOrder = batchIndex;
+        layer.add(lines);
+      });
+      return true;
+    }
+
+    function threeDrawingBytes(data) {
+      if (data instanceof ArrayBuffer) {
+        return new Uint8Array(data);
+      }
+      if (ArrayBuffer.isView(data)) {
+        return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+      }
+      if (typeof data !== "string") {
+        return undefined;
+      }
+
+      try {
+        const binary = atob(data);
+        const bytes = new Uint8Array(binary.length);
+        for (let index = 0; index < binary.length; index += 1) {
+          bytes[index] = binary.charCodeAt(index);
+        }
+        return bytes;
+      } catch {
+        return undefined;
+      }
+    }
+
+    function normalizedThreeLineWidth(value) {
+      return Math.max(1, Math.round((Number(value) || 1) * 1000) / 1000);
     }
 
     function threeDrawingLineSegments(lines, maxSegments) {
@@ -4683,6 +4917,7 @@ class NetLogoModelEditorProvider {
           },
           end: threeDrawingLineEnd(line),
           color: threeColorHex(line),
+          opacity: threeOpacity(line),
           width: Math.max(1, Number(line.width) || 1)
         };
         if (threeTrailPointIsValid(segment.start) && threeTrailPointIsValid(segment.end)) {
@@ -4736,10 +4971,12 @@ class NetLogoModelEditorProvider {
       const groups = new Map();
       for (const segment of segments) {
         const width = Math.max(1, Number(segment.width) || 1);
-        const key = segment.color + "|" + width;
+        const opacity = Number.isFinite(Number(segment.opacity)) ? clampNumber(Number(segment.opacity), 0, 1) : 1;
+        const key = segment.color + "|" + width + "|" + opacity;
         const group = groups.get(key) ?? {
           color: segment.color,
           width,
+          opacity,
           positions: []
         };
         const positions = group.positions;
@@ -4756,9 +4993,9 @@ class NetLogoModelEditorProvider {
         const material = new THREE.LineBasicMaterial({
           color: group.color,
           linewidth: group.width,
-          transparent: false,
-          opacity: 1,
-          depthWrite: true
+          transparent: group.opacity < 1,
+          opacity: group.opacity,
+          depthWrite: group.opacity >= 1
         });
         layer.add(new THREE.LineSegments(geometry, material));
       }
@@ -4813,7 +5050,7 @@ class NetLogoModelEditorProvider {
       ].join("|");
     }
 
-    function threeTextSprite(THREE, text, color, position) {
+    function threeTextSprite(THREE, text, color, opacity, position) {
       const canvas = document.createElement("canvas");
       const context = canvas.getContext("2d");
       const fontSize = 28;
@@ -4830,7 +5067,8 @@ class NetLogoModelEditorProvider {
       context.fillText(text, canvas.width / 2, canvas.height / 2);
 
       const texture = new THREE.CanvasTexture(canvas);
-      const material = new THREE.SpriteMaterial({ map: texture, transparent: true });
+      texture.colorSpace = THREE.SRGBColorSpace;
+      const material = new THREE.SpriteMaterial({ map: texture, transparent: true, opacity });
       const sprite = new THREE.Sprite(material);
       sprite.position.copy(position);
       sprite.scale.set(canvas.width / 28, canvas.height / 28, 1);
@@ -4841,13 +5079,13 @@ class NetLogoModelEditorProvider {
       const object = hit.object;
       const kind = object.userData?.kind;
       if (kind === "turtle") {
-        const turtle = object.userData.items?.[hit.instanceId ?? 0];
+        const turtle = threeHitItem(hit);
         return turtle
           ? "Turtle " + turtle.who + " · " + pointText(turtle.x, turtle.y, turtle.z) + (turtle.shape ? " · " + turtle.shape : "")
           : "Turtle";
       }
       if (kind === "patch") {
-        const patch = object.userData.items?.[hit.instanceId ?? 0];
+        const patch = threeHitItem(hit);
         return patch ? "Patch · " + pointText(patch.x, patch.y, patch.z) : "Patch";
       }
       if (kind === "link") {
@@ -4857,6 +5095,17 @@ class NetLogoModelEditorProvider {
           : "Link";
       }
       return "3D";
+    }
+
+    function threeHitItem(hit) {
+      const userData = hit.object?.userData;
+      if (userData?.item) {
+        return userData.item;
+      }
+      const rawIndex = userData?.lineItems
+        ? Math.floor((Number(hit.index) || 0) / 2)
+        : (hit.instanceId ?? 0);
+      return userData?.items?.[rawIndex];
     }
 
     function renderThreeInspector(container, hit) {
@@ -4887,7 +5136,7 @@ class NetLogoModelEditorProvider {
       const object = hit.object;
       const kind = object.userData?.kind;
       if (kind === "turtle") {
-        const turtle = object.userData.items?.[hit.instanceId ?? 0];
+        const turtle = threeHitItem(hit);
         if (!turtle) {
           return undefined;
         }
@@ -4905,7 +5154,7 @@ class NetLogoModelEditorProvider {
         };
       }
       if (kind === "patch") {
-        const patch = object.userData.items?.[hit.instanceId ?? 0];
+        const patch = threeHitItem(hit);
         if (!patch) {
           return undefined;
         }
@@ -4976,38 +5225,47 @@ class NetLogoModelEditorProvider {
         return 0x5aa7ff;
       }
 
-      if (color < 10) {
-        const channel = Math.round(clampNumber(color / 9.9, 0, 1) * 255);
-        return rgbToHex(channel, channel, channel);
+      const wrapped = ((color % 140) + 140) % 140;
+      const colorIndex = Math.trunc(wrapped * 10);
+      if (colorIndex === 0) {
+        return 0x000000;
+      }
+      if (colorIndex === 99) {
+        return 0xffffff;
       }
 
-      const palette = new Map([
-        [15, [215, 48, 39]],
-        [25, [255, 149, 40]],
-        [35, [139, 91, 45]],
-        [45, [255, 242, 0]],
-        [55, [46, 176, 73]],
-        [65, [139, 212, 57]],
-        [75, [36, 190, 150]],
-        [85, [49, 197, 210]],
-        [95, [92, 164, 255]],
-        [105, [46, 82, 220]],
-        [115, [137, 91, 215]],
-        [125, [214, 83, 196]],
-        [135, [255, 123, 164]]
-      ]);
-      const base = Math.round((color - 5) / 10) * 10 + 5;
-      const rgb = palette.get(base) ?? [90, 167, 255];
-      const shade = clampNumber(color - base, -4.9, 4.9);
-      const shaded = shade < 0
-        ? mixRgb(rgb, [0, 0, 0], Math.min(0.55, Math.abs(shade) * 0.085))
-        : mixRgb(rgb, [255, 255, 255], Math.min(0.68, shade * 0.12));
+      const rawPalette = [
+        [140, 140, 140],
+        [215, 48, 39],
+        [241, 105, 19],
+        [156, 109, 70],
+        [237, 237, 47],
+        [87, 176, 58],
+        [42, 209, 57],
+        [27, 158, 119],
+        [82, 196, 196],
+        [43, 140, 190],
+        [50, 92, 168],
+        [123, 78, 163],
+        [166, 25, 105],
+        [224, 126, 149]
+      ];
+      const rgb = rawPalette[Math.floor(colorIndex / 100)] ?? rawPalette[0];
+      const shade = ((colorIndex % 100) - 50) / 50.48 + 0.012;
+      const shaded = rgb.map(channel => shade < 0
+        ? channel + Math.trunc(channel * shade)
+        : channel + Math.trunc((255 - channel) * shade));
       return rgbToHex(shaded[0], shaded[1], shaded[2]);
     }
 
     function threeColorHex(item, colorKey = "color", rgbKey = "colorRgb") {
       const rgbHex = rgbValueToHex(item?.[rgbKey]);
       return rgbHex ?? netLogoColorHex(item?.[colorKey]);
+    }
+
+    function threeOpacity(item, alphaKey = "alpha") {
+      const alpha = Number(item?.[alphaKey]);
+      return Number.isFinite(alpha) ? clampNumber(alpha / 255, 0, 1) : 1;
     }
 
     function rgbValueToHex(rgb) {
@@ -5024,11 +5282,7 @@ class NetLogoModelEditorProvider {
     }
 
     function clampRgbChannel(value) {
-      return Math.round(clampNumber(value, 0, 255));
-    }
-
-    function mixRgb(left, right, amount) {
-      return left.map((channel, index) => Math.round(channel + (right[index] - channel) * amount));
+      return Math.trunc(clampNumber(value, 0, 255));
     }
 
     function rgbToHex(red, green, blue) {

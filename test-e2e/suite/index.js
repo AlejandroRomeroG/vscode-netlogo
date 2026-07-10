@@ -25,6 +25,10 @@ async function run() {
     assert.ok(result.view3DState, "3D setup should return view3DState");
     assert.ok(result.view3DState.turtles.length > 1, "3D view state should contain multiple turtles");
     assert.ok(result.view3DState.turtles.every(turtle => typeof turtle.shape === "string"));
+    assert.equal(result.view3DState.drawingData instanceof ArrayBuffer, true);
+    const drawingHeader = new DataView(result.view3DState.drawingData);
+    assert.equal(drawingHeader.getUint32(0, false), 0x4e4c4433);
+    assert.equal(drawingHeader.getUint32(4, false), 2);
   }
   await vscode.commands.executeCommand("workbench.action.closeAllEditors");
 }
