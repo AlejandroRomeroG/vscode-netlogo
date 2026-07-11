@@ -339,11 +339,16 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
 
     const edit = new vscode.WorkspaceEdit();
     edit.replace(document.uri, new vscode.Range(0, 0, document.lineCount, 0), replacement);
-    await vscode.workspace.applyEdit(edit);
+    const applied = await vscode.workspace.applyEdit(edit);
+    if (applied && kind === "plot") {
+      this.runner.invalidate(document.uri);
+    }
   }
 
   private async deleteWidget(document: vscode.TextDocument, widgetId: string): Promise<void> {
     const current = parseNetLogoModel(document.getText(), document.fileName);
+    const widget = parseInterfacePreview(current.interfaceSource, current.format).widgets
+      .find(candidate => candidate.id === widgetId);
     const interfaceSource = deleteInterfaceWidget(current.interfaceSource, current.format, widgetId);
     if (interfaceSource === current.interfaceSource) {
       return;
@@ -356,7 +361,10 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
 
     const edit = new vscode.WorkspaceEdit();
     edit.replace(document.uri, new vscode.Range(0, 0, document.lineCount, 0), replacement);
-    await vscode.workspace.applyEdit(edit);
+    const applied = await vscode.workspace.applyEdit(edit);
+    if (applied && widget?.kind === "plot") {
+      this.runner.invalidate(document.uri);
+    }
   }
 
   private async updateWidgetProperties(
@@ -365,6 +373,8 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
     updates: WidgetPropertyUpdates
   ): Promise<void> {
     const current = parseNetLogoModel(document.getText(), document.fileName);
+    const widget = parseInterfacePreview(current.interfaceSource, current.format).widgets
+      .find(candidate => candidate.id === widgetId);
     const interfaceSource = updateInterfaceWidgetProperties(current.interfaceSource, current.format, widgetId, updates);
     if (interfaceSource === current.interfaceSource) {
       return;
@@ -377,7 +387,10 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
 
     const edit = new vscode.WorkspaceEdit();
     edit.replace(document.uri, new vscode.Range(0, 0, document.lineCount, 0), replacement);
-    await vscode.workspace.applyEdit(edit);
+    const applied = await vscode.workspace.applyEdit(edit);
+    if (applied && widget?.kind === "plot") {
+      this.runner.invalidate(document.uri);
+    }
   }
 
   private async updateWidgetBounds(document: vscode.TextDocument, widgetId: string, bounds: WidgetBounds): Promise<void> {
@@ -1227,6 +1240,22 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
       gap: 3px;
     }
 
+    .monitor-widget {
+      grid-template-rows: auto minmax(0, 1fr);
+      gap: 2px;
+      padding: 3px 6px;
+    }
+
+    .monitor-heading {
+      overflow: hidden;
+      color: var(--vscode-editor-foreground);
+      font-size: 11px;
+      font-weight: 600;
+      line-height: 1.1;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
     .slider-widget {
       grid-template-rows: minmax(12px, auto) minmax(13px, 1fr);
       padding: 3px 6px;
@@ -1320,6 +1349,10 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
     }
 
     .monitor-value {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      min-height: 0;
       text-align: right;
       font-family: var(--vscode-editor-font-family, monospace);
     }
@@ -1372,6 +1405,17 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
 
     .plot-no-data {
       text-anchor: middle;
+    }
+
+    .plot-legend-label {
+      fill: var(--vscode-editor-foreground);
+      font-family: var(--vscode-font-family);
+      font-size: 7px;
+    }
+
+    .plot-legend-swatch {
+      stroke: color-mix(in srgb, var(--vscode-editor-foreground) 30%, transparent);
+      stroke-width: 0.5;
     }
 
     .plot-empty {
@@ -1614,6 +1658,66 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
       min-height: 26px;
     }
 
+    .plot-pens-editor {
+      display: grid;
+      gap: 8px;
+      margin-bottom: 14px;
+    }
+
+    .plot-pens-heading {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .plot-pens-heading h3 {
+      margin: 0;
+      font-size: 12px;
+    }
+
+    .plot-pen-card {
+      display: grid;
+      gap: 7px;
+      padding: 8px;
+      border: 1px solid var(--vscode-panel-border);
+      border-radius: 4px;
+      background: var(--vscode-editorWidget-background);
+    }
+
+    .plot-pen-card-header {
+      display: grid;
+      grid-template-columns: 18px minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .plot-pen-swatch {
+      width: 18px;
+      height: 18px;
+      border: 1px solid var(--vscode-panel-border);
+      border-radius: 3px;
+    }
+
+    .plot-pen-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 7px;
+    }
+
+    .plot-pen-select {
+      width: 100%;
+      min-width: 0;
+      min-height: 26px;
+    }
+
+    .plot-pen-delete {
+      min-height: 24px;
+      padding: 2px 7px;
+      color: var(--vscode-button-foreground);
+      background: var(--vscode-statusBarItem-errorBackground, var(--vscode-button-background));
+    }
+
     .no-selection {
       color: var(--vscode-descriptionForeground);
     }
@@ -1634,7 +1738,7 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
           <span id="speedLabel" class="speed-label">normal speed</span>
           <span class="speed-slider-wrap">
             <span class="speed-normal-mark" aria-hidden="true"></span>
-            <input id="speedSlider" type="range" min="-10" max="10" step="1" value="0" aria-label="Forever speed">
+            <input id="speedSlider" type="range" min="-110" max="112" step="1" value="0" aria-label="Forever speed">
           </span>
         </label>
         <span class="run-controls">
@@ -1677,7 +1781,7 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
               </select>
               <button id="addWidgetButton" type="button">Add widget</button>
               <div class="toolbar-spacer"></div>
-              <button id="deleteWidgetButton" type="button" disabled>Delete widget</button>
+              <button id="deleteWidgetButton" type="button" hidden disabled>Delete widget</button>
             </div>
             <div class="surface-scroller">
               <div id="surface" class="surface"></div>
@@ -1832,10 +1936,13 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
       "ycor"
     ]);
     const netLogoNumberPattern = /^-?(?:\\d+\\.?\\d*|\\.\\d+)(?:e[+-]?\\d+)?$/i;
-    const RUN_SPEED_MIN = -10;
-    const RUN_SPEED_MAX = 10;
-    const RUN_SPEED_NORMAL_DELAY_MS = 20;
-    const RUN_SPEED_BATCHES = [2, 4, 8, 16, 24, 32, 48, 64, 96, 128];
+    // NetLogo 6.4 uses these raw Swing slider bounds, with a dead zone around
+    // the center. Outside it, two raw units equal one UpdateManager speed unit.
+    const RUN_SPEED_RAW_MIN = -110;
+    const RUN_SPEED_RAW_MAX = 112;
+    const RUN_SPEED_DEAD_ZONE = 10;
+    const RUN_SPEED_DEFAULT_FRAME_RATE = 30;
+    const RUN_SPEED_MAX_BATCH = 256;
     const THREE_INSTANCE_CHUNK_SIZE = 60000;
 
     const state = {
@@ -1866,7 +1973,8 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
       threeBackground: restoredThreeBackground(restoredUiState),
       threeInteractionMode: validThreeInteractionMode(restoredUiState.threeInteractionMode),
       threeCamera: sanitizeThreeCamera(restoredUiState.threeCamera),
-      plotCsv: {}
+      plotData: {},
+      dirtyPlotWidgets: new Set()
     };
 
     const inputs = {
@@ -1982,6 +2090,13 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
       state.runSpeed = clampRunSpeed(speedSlider.value);
       persistUiState();
       updateSpeedControl();
+    });
+    speedSlider.addEventListener("change", () => {
+      if (Math.abs(state.runSpeed) <= RUN_SPEED_DEAD_ZONE) {
+        state.runSpeed = 0;
+        persistUiState();
+        updateSpeedControl();
+      }
     });
     updateSpeedControl();
     renderTickCount();
@@ -2148,6 +2263,7 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
         infoEditing: state.infoEditing,
         interfaceMode: state.interfaceMode,
         runSpeed: state.runSpeed,
+        runSpeedScaleVersion: 2,
         threeBackground: state.threeBackground,
         threeBackgroundPreferenceVersion: 1,
         threeInteractionMode: state.threeInteractionMode,
@@ -2173,11 +2289,20 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
 
     function restoredRunSpeed(value) {
       const number = Number(value);
-      return Number.isFinite(number) ? clampRunSpeed(number) : 0;
+      if (!Number.isFinite(number)) {
+        return 0;
+      }
+      if (restoredUiState.runSpeedScaleVersion === 2) {
+        return clampRunSpeed(number);
+      }
+      // Before scale version 2 the webview stored -10..10. Preserve the old
+      // thumb's relative distance from normal when migrating to NetLogo's raw
+      // -110..112 scale.
+      return clampRunSpeed(number < 0 ? number * 10 - 10 : number > 0 ? number * 10 + 10 : 0);
     }
 
     function clampRunSpeed(value) {
-      return clampNumber(Math.round(Number(value)), RUN_SPEED_MIN, RUN_SPEED_MAX);
+      return clampNumber(Math.round(Number(value)), RUN_SPEED_RAW_MIN, RUN_SPEED_RAW_MAX);
     }
 
     function sanitizeThreeCamera(camera) {
@@ -2233,7 +2358,9 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
     }
 
     function updateRuntimeBanner(message) {
-      const text = message || (state.runtimeConfigured ? "" : "NetLogo runtime not configured.");
+      const text = message || (state.runtimeStatus === "reload-needed"
+        ? "Plot definition changed. Run Setup to reload the model workspace."
+        : state.runtimeConfigured ? "" : "NetLogo runtime not configured.");
       runtimeBanner.classList.toggle("hidden", !text);
       runtimeBannerText.textContent = text;
       configureRuntimeButton.hidden = state.runtimeStatus !== "not-configured";
@@ -2242,11 +2369,15 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
 
     function setInterfaceMode(mode) {
       state.interfaceMode = mode === "layout" ? "layout" : "interact";
+      if (state.interfaceMode === "interact") {
+        state.selectedWidgetId = null;
+      }
       interactModeButton.classList.toggle("active", state.interfaceMode === "interact");
       layoutModeButton.classList.toggle("active", state.interfaceMode === "layout");
       interactModeButton.setAttribute("aria-pressed", String(state.interfaceMode === "interact"));
       layoutModeButton.setAttribute("aria-pressed", String(state.interfaceMode === "layout"));
       addWidgetButton.disabled = state.interfaceMode !== "layout";
+      deleteWidgetButton.hidden = state.interfaceMode !== "layout";
       deleteWidgetButton.disabled = state.interfaceMode !== "layout" || !findWidget(state.selectedWidgetId);
       persistUiState();
       renderInterface();
@@ -3060,24 +3191,25 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
     function updateSpeedControl() {
       state.runSpeed = clampRunSpeed(state.runSpeed);
       speedSlider.value = String(state.runSpeed);
-      const delay = runLoopDelayMs();
+      const targetFps = runLoopTargetFps();
       const batchSize = runLoopBatchSize();
       const label = runSpeedLabel();
       speedLabel.textContent = label;
-      const timing = delay === 0 ? "" : " · " + delay + " ms";
+      const timing = " · " + formatRunLoopFps(targetFps) + " fps";
       const batching = batchSize > 1 ? " · " + batchSize + " ticks/update" : "";
       speedSlider.title = label + timing + batching;
       speedSlider.setAttribute(
         "aria-valuetext",
         label
-          + (delay === 0 ? "" : ", " + delay + " milliseconds")
+          + ", target " + formatRunLoopFps(targetFps) + " frames per second"
           + (batchSize > 1 ? ", " + batchSize + " ticks per update" : "")
       );
     }
 
     function runSpeedLabel() {
-      const speed = clampRunSpeed(state.runSpeed);
-      if (speed <= RUN_SPEED_MIN) {
+      const rawSpeed = clampRunSpeed(state.runSpeed);
+      const speed = runSpeedPosition();
+      if (rawSpeed <= RUN_SPEED_RAW_MIN) {
         return "slowest";
       }
       if (speed < 0) {
@@ -3086,26 +3218,65 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
       if (speed === 0) {
         return "normal speed";
       }
-      if (speed >= RUN_SPEED_MAX) {
+      if (rawSpeed >= RUN_SPEED_RAW_MAX) {
         return "fastest";
       }
       return "faster";
     }
 
-    function runLoopDelayMs() {
-      const speed = clampRunSpeed(state.runSpeed);
-      if (speed < 0) {
-        return Math.round(RUN_SPEED_NORMAL_DELAY_MS * Math.pow(1.5, Math.abs(speed)));
+    function runSpeedPosition() {
+      const rawSpeed = clampRunSpeed(state.runSpeed);
+      if (rawSpeed < -RUN_SPEED_DEAD_ZONE) {
+        return (rawSpeed + RUN_SPEED_DEAD_ZONE) / 2;
       }
-      return Math.max(0, Math.round(RUN_SPEED_NORMAL_DELAY_MS * Math.pow(0.62, speed)));
+      if (rawSpeed > RUN_SPEED_DEAD_ZONE) {
+        return (rawSpeed - RUN_SPEED_DEAD_ZONE) / 2;
+      }
+      return 0;
+    }
+
+    function configuredFrameRate() {
+      const view = state.interfacePreview.widgets.find(widget => widget.kind === "view");
+      const configured = Number(view?.details?.frameRate ?? view?.details?.["frame-rate"]);
+      return Number.isFinite(configured) && configured > 0 ? configured : RUN_SPEED_DEFAULT_FRAME_RATE;
+    }
+
+    function runLoopDelayMs() {
+      const speed = runSpeedPosition();
+      const defaultFrameRate = configuredFrameRate();
+      const frameRate = speed >= 0
+        ? defaultFrameRate + speed - 1 + Math.pow(1.3, speed)
+        : defaultFrameRate * Math.pow(0.9, -speed);
+      const frameGap = 1000 / Math.max(frameRate, Number.EPSILON);
+      if (speed < 0) {
+        // Tick-based NetLogo adds this slowdown after its frame-rate pause.
+        return frameGap + Math.pow(Math.pow(9000, 0.02), -speed);
+      }
+      return frameGap;
+    }
+
+    function runLoopTargetFps() {
+      return 1000 / runLoopDelayMs();
+    }
+
+    function formatRunLoopFps(value) {
+      if (value >= 100) {
+        return String(Math.round(value));
+      }
+      return String(Math.round(value * 10) / 10);
     }
 
     function runLoopBatchSize() {
-      const speed = clampRunSpeed(state.runSpeed);
-      if (speed <= 0) {
+      const speed = runSpeedPosition();
+      if (speed <= 25) {
         return 1;
       }
-      return RUN_SPEED_BATCHES[speed - 1] ?? RUN_SPEED_BATCHES[RUN_SPEED_BATCHES.length - 1];
+      const tickGap = speed <= 40
+        ? Math.ceil(speed - 24)
+        : Math.floor(speed - 24 + Math.pow(Math.pow(1_000_000, 0.1), speed - 40));
+      // Large native gaps are split so Stop remains cooperative across the
+      // extension bridge and a single request cannot monopolize the runtime.
+      return Math.min(RUN_SPEED_MAX_BATCH, Math.max(1, tickGap));
     }
 
     function startRunLoop(command, label) {
@@ -3117,7 +3288,8 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
       state.runLoop = {
         command,
         label: label || command,
-        waiting: false
+        waiting: false,
+        requestStartedAt: null
       };
       state.runtimeStatus = "running";
       updateRuntimeBanner();
@@ -3145,6 +3317,7 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
       }
 
       loop.waiting = true;
+      loop.requestStartedAt = performance.now();
       postRunCommand(loop.command, true, runLoopBatchSize());
     }
 
@@ -3174,6 +3347,99 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
         useGrouping: true,
         maximumFractionDigits: Number.isInteger(numeric) ? 0 : 2
       }).format(numeric);
+    }
+
+    function formatMonitorValue(value, precision) {
+      const text = String(value ?? "").trim();
+      if (!/^[-+]?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][-+]?\\d+)?$/.test(text)) {
+        return text || "...";
+      }
+
+      const numeric = Number(text);
+      if (!Number.isFinite(numeric)) {
+        return text;
+      }
+
+      const requestedPrecision = Number(precision);
+      const decimalPlaces = Number.isFinite(requestedPrecision)
+        ? Math.max(Math.round(requestedPrecision), 0)
+        : 17;
+      const approximated = netLogoMonitorApproximate(numeric, decimalPlaces);
+      return formatNetLogoMonitorNumber(
+        Object.is(approximated, -0) ? 0 : approximated,
+        decimalPlaces >= 17 ? text : undefined
+      );
+    }
+
+    // NetLogo evaluates numeric monitor reporters through Approximate.approximate.
+    // In particular, its floor(value * scale + 0.5) rule rounds negative ties
+    // toward positive infinity instead of using Intl.NumberFormat's half-away-
+    // from-zero rule. At 17+ places NetLogo deliberately leaves the double alone.
+    function netLogoMonitorApproximate(value, decimalPlaces) {
+      if (decimalPlaces >= 17) {
+        return value;
+      }
+
+      const scale = Math.pow(10, decimalPlaces);
+      const approximated = Math.floor(value * scale + 0.5) / scale;
+      return decimalPlaces > 0 ? approximated : Math.floor(approximated + 0.5);
+    }
+
+    function formatNetLogoMonitorNumber(value, originalText) {
+      // Dump.number prints exact integer doubles through 2^53 inclusively.
+      if (Number.isInteger(value) && Math.abs(value) <= 9007199254740992) {
+        return groupMonitorDecimal(String(value));
+      }
+
+      const exponential = value.toExponential();
+      const exponent = Number(exponential.slice(exponential.lastIndexOf("e") + 1));
+      if (exponent < -3 || exponent >= 7) {
+        const source = originalText && /[eE]/.test(originalText)
+          ? originalText
+          : exponential;
+        return normalizeMonitorExponent(source, value);
+      }
+
+      return groupMonitorDecimal(String(value));
+    }
+
+    function normalizeMonitorExponent(source, value) {
+      let scientific = source;
+      let separator = Math.max(scientific.lastIndexOf("e"), scientific.lastIndexOf("E"));
+      if (separator < 0) {
+        scientific = value.toExponential();
+        separator = scientific.lastIndexOf("e");
+      }
+
+      let mantissa = scientific.slice(0, separator);
+      const exponent = Number(scientific.slice(separator + 1));
+      const dot = mantissa.indexOf(".");
+      if (dot < 0) {
+        mantissa += ".0";
+      } else {
+        while (mantissa.endsWith("0") && !mantissa.endsWith(".0")) {
+          mantissa = mantissa.slice(0, -1);
+        }
+      }
+      return mantissa + "E" + String(exponent);
+    }
+
+    function groupMonitorDecimal(source) {
+      const negative = source.startsWith("-");
+      const unsigned = negative || source.startsWith("+") ? source.slice(1) : source;
+      const dot = unsigned.indexOf(".");
+      const whole = dot < 0 ? unsigned : unsigned.slice(0, dot);
+      let fraction = dot < 0 ? "" : unsigned.slice(dot + 1);
+      while (fraction.endsWith("0")) {
+        fraction = fraction.slice(0, -1);
+      }
+
+      const groups = [];
+      for (let end = whole.length; end > 0; end -= 3) {
+        groups.unshift(whole.slice(Math.max(0, end - 3), end));
+      }
+      const grouped = groups.join(",") || "0";
+      return (negative ? "-" : "") + grouped + (fraction ? "." + fraction : "");
     }
 
     function renderInterface() {
@@ -3274,7 +3540,7 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
         if (widget.kind === "monitor") {
           const value = element.querySelector(".monitor-value");
           if (value) {
-            value.textContent = state.runtimeValues[widget.id] ?? widget.details?.source ?? "...";
+            value.textContent = formatMonitorValue(state.runtimeValues[widget.id] ?? "...", widget.details?.precision);
           }
         } else if (widget.kind === "plot") {
           const plotBody = element.querySelector(".plot-body");
@@ -3307,20 +3573,26 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
       renderTickCount();
       state.viewImageDataUri = result.viewImageDataUri ?? null;
       state.view3DState = result.view3DState ?? null;
-      state.plotCsv = {};
+      state.plotData = {};
       for (const plot of result.plotValues ?? []) {
-        state.plotCsv[plot.widgetId] = plot.csv;
+        state.plotData[plot.widgetId] = plot.data ?? null;
+        state.dirtyPlotWidgets.delete(plot.widgetId);
       }
       const loop = state.runLoop;
       updateRuntimeBanner();
       setStatus(loop ? "Running " + loop.label : result.command ? "Updated after " + result.command : "Updated");
       if (loop) {
         loop.waiting = false;
+        const requestElapsed = loop.requestStartedAt === null
+          ? 0
+          : Math.max(0, performance.now() - loop.requestStartedAt);
+        loop.requestStartedAt = null;
+        const remainingDelay = Math.max(0, runLoopDelayMs() - requestElapsed);
         setTimeout(() => {
           if (state.runLoop === loop) {
             scheduleRunLoop();
           }
-        }, runLoopDelayMs());
+        }, remainingDelay);
       }
       updateRunControls();
       const canRefresh3DOnly = Boolean(result.view3DState)
@@ -3652,6 +3924,10 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
         }
         propertiesPanel.append(group);
       }
+
+      if (widget.kind === "plot") {
+        propertiesPanel.append(renderPlotPensEditor(widget));
+      }
     }
 
     function renderBoundsFields(widget) {
@@ -3716,8 +3992,14 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
     }
 
     function commitWidgetProperties(widget, key, value) {
+      if (widget.kind === "plot") {
+        stopRunLoop();
+        state.dirtyPlotWidgets.add(widget.id);
+        state.runtimeStatus = "reload-needed";
+        updateRuntimeBanner();
+      }
       updateWidgetPropertyInState(widget, key, value);
-      setStatus("Editing");
+      setStatus(widget.kind === "plot" ? "Plot changed · run Setup" : "Editing");
       vscode.postMessage({
         type: "update-properties",
         widgetId: widget.id,
@@ -3777,7 +4059,11 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
             descriptor("xMin", "X min", details.xMin, "number"),
             descriptor("xMax", "X max", details.xMax, "number"),
             descriptor("yMin", "Y min", details.yMin, "number"),
-            descriptor("yMax", "Y max", details.yMax, "number")
+            descriptor("yMax", "Y max", details.yMax, "number"),
+            descriptor("autoplot", "Auto scale", details.autoplot, "checkbox"),
+            descriptor("legend", "Show legend", details.legend, "checkbox"),
+            descriptor("setupCode", "Plot setup commands", details.setupCode, "text", true),
+            descriptor("updateCode", "Plot update commands", details.updateCode, "text", true)
           ];
         case "input":
           return [
@@ -3799,6 +4085,205 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
             descriptor("label", "Label", widget.label)
           ];
       }
+    }
+
+    function renderPlotPensEditor(widget) {
+      const pens = plotPens(widget);
+      const editor = node("section", "plot-pens-editor", "");
+      const addButton = node("button", "", "Add pen");
+      addButton.type = "button";
+      addButton.addEventListener("click", () => {
+        const nextPens = pens.concat([newPlotPen(pens)]);
+        commitWidgetProperties(widget, "pens", nextPens);
+      });
+      editor.append(node("div", "plot-pens-heading", [
+        node("h3", "", "Pens"),
+        addButton
+      ]));
+
+      if (pens.length === 0) {
+        editor.append(node("div", "no-selection", "No pens. Add one to plot a series."));
+        return editor;
+      }
+
+      pens.forEach((pen, index) => editor.append(renderPlotPenCard(widget, pens, pen, index)));
+      return editor;
+    }
+
+    function renderPlotPenCard(widget, pens, pen, index) {
+      const card = node("div", "plot-pen-card", "");
+      const nameInput = node("input", "property-input", "");
+      nameInput.type = "text";
+      nameInput.value = String(pen.name ?? "");
+      nameInput.setAttribute("aria-label", "Pen name");
+      nameInput.addEventListener("change", () => {
+        const requested = nameInput.value;
+        if (requested !== "" && pens.some((candidate, candidateIndex) =>
+          candidateIndex !== index && String(candidate.name ?? "") === requested
+        )) {
+          setStatus("Non-empty pen names must be unique");
+          renderProperties();
+          return;
+        }
+        commitPlotPen(widget, pens, index, { name: requested });
+      });
+
+      const swatch = node("span", "plot-pen-swatch", "");
+      swatch.style.backgroundColor = plotCssColor(pen.color);
+      const deleteButton = node("button", "plot-pen-delete", "Delete");
+      deleteButton.type = "button";
+      deleteButton.addEventListener("click", () => {
+        commitWidgetProperties(widget, "pens", pens.filter((_candidate, candidateIndex) => candidateIndex !== index));
+      });
+      card.append(node("div", "plot-pen-card-header", [swatch, nameInput, deleteButton]));
+
+      const colorSelect = node("select", "plot-pen-select", "");
+      colorSelect.setAttribute("aria-label", "Pen color");
+      const palette = plotPalette();
+      const currentColor = Number(pen.color);
+      if (!palette.some(entry => entry.color === currentColor)) {
+        const custom = node("option", "", "Custom " + plotCssColor(currentColor));
+        custom.value = String(currentColor);
+        custom.selected = true;
+        colorSelect.append(custom);
+      }
+      let paletteGroup;
+      let paletteFamily;
+      palette.forEach(entry => {
+        if (entry.family !== paletteFamily) {
+          paletteFamily = entry.family;
+          paletteGroup = document.createElement("optgroup");
+          paletteGroup.label = entry.family;
+          colorSelect.append(paletteGroup);
+        }
+        const option = node("option", "", entry.name);
+        option.value = String(entry.color);
+        option.selected = entry.color === currentColor;
+        option.style.color = plotCssColor(entry.color);
+        paletteGroup.append(option);
+      });
+      colorSelect.addEventListener("change", () => {
+        commitPlotPen(widget, pens, index, { color: Number(colorSelect.value) });
+      });
+
+      const modeSelect = node("select", "plot-pen-select", "");
+      modeSelect.setAttribute("aria-label", "Pen mode");
+      [[0, "Line"], [1, "Bar"], [2, "Point"]].forEach(([value, label]) => {
+        const option = node("option", "", label);
+        option.value = String(value);
+        option.selected = Number(pen.mode) === value;
+        modeSelect.append(option);
+      });
+      modeSelect.addEventListener("change", () => {
+        commitPlotPen(widget, pens, index, { mode: Number(modeSelect.value) });
+      });
+
+      const intervalInput = node("input", "property-input", "");
+      intervalInput.type = "number";
+      intervalInput.min = "0.000001";
+      intervalInput.step = "any";
+      intervalInput.value = String(pen.interval ?? 1);
+      intervalInput.addEventListener("change", () => {
+        const interval = Number(intervalInput.value);
+        if (!Number.isFinite(interval) || interval <= 0) {
+          setStatus("Pen interval must be greater than zero");
+          renderProperties();
+          return;
+        }
+        commitPlotPen(widget, pens, index, { interval });
+      });
+
+      const legendInput = node("input", "", "");
+      legendInput.type = "checkbox";
+      legendInput.checked = pen.inLegend !== false;
+      legendInput.addEventListener("change", () => {
+        commitPlotPen(widget, pens, index, { inLegend: legendInput.checked });
+      });
+
+      card.append(node("div", "plot-pen-grid", [
+        plotPenField("Color", colorSelect),
+        plotPenField("Mode", modeSelect),
+        plotPenField("Interval", intervalInput),
+        node("label", "property-check", [legendInput, node("span", "property-label", "Show in legend")])
+      ]));
+
+      const setupInput = node("textarea", "property-textarea", "");
+      setupInput.value = String(pen.setupCode ?? "");
+      setupInput.addEventListener("change", () => {
+        commitPlotPen(widget, pens, index, { setupCode: setupInput.value });
+      });
+      const updateInput = node("textarea", "property-textarea", "");
+      updateInput.value = String(pen.updateCode ?? "");
+      updateInput.addEventListener("change", () => {
+        commitPlotPen(widget, pens, index, { updateCode: updateInput.value });
+      });
+      card.append(
+        plotPenField("Pen setup commands", setupInput),
+        plotPenField("Pen update commands", updateInput)
+      );
+      return card;
+    }
+
+    function plotPenField(label, input) {
+      return node("label", "property-row", [
+        node("span", "property-label", label),
+        input
+      ]);
+    }
+
+    function plotPens(widget) {
+      return Array.isArray(widget.details?.pens)
+        ? widget.details.pens.filter(pen => pen && typeof pen === "object").map(pen => ({
+          name: String(pen.name ?? "Pen"),
+          interval: Number.isFinite(Number(pen.interval)) ? Number(pen.interval) : 1,
+          mode: [0, 1, 2].includes(Number(pen.mode)) ? Number(pen.mode) : 0,
+          color: Number.isInteger(Number(pen.color)) ? Number(pen.color) : (0xff000000 | netLogoColorHex(0)) | 0,
+          inLegend: pen.inLegend !== false,
+          setupCode: String(pen.setupCode ?? ""),
+          updateCode: String(pen.updateCode ?? "")
+        }))
+        : [];
+    }
+
+    function commitPlotPen(widget, pens, index, changes) {
+      const nextPens = pens.map((pen, candidateIndex) => candidateIndex === index
+        ? { ...pen, ...changes }
+        : pen);
+      commitWidgetProperties(widget, "pens", nextPens);
+    }
+
+    function newPlotPen(_pens) {
+      return {
+        name: "",
+        interval: 1,
+        mode: 0,
+        color: (0xff000000 | netLogoColorHex(0)) | 0,
+        inLegend: true,
+        setupCode: "",
+        updateCode: ""
+      };
+    }
+
+    function plotPalette() {
+      const families = [
+        "gray", "red", "orange", "brown", "yellow", "green", "lime",
+        "turquoise", "cyan", "sky", "blue", "violet", "magenta", "pink"
+      ];
+      const offsets = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 9.9];
+      return families.flatMap((family, familyIndex) => offsets.map(offset => {
+        const colorNumber = familyIndex * 10 + offset;
+        const name = colorNumber === 0
+          ? "black"
+          : colorNumber === 9.9
+            ? "white"
+            : offset === 5 ? family : family + " " + colorNumber;
+        return {
+          family,
+          name,
+          colorNumber,
+          color: (0xff000000 | netLogoColorHex(colorNumber)) | 0
+        };
+      }));
     }
 
     function descriptor(key, label, value, type = "text", multiline = false) {
@@ -3961,8 +4446,8 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
           ]);
         case "monitor":
           return fragment([
-            labelWithType(widget),
-            node("div", "monitor-value", state.runtimeValues[widget.id] ?? widget.details?.source ?? "...")
+            node("div", "monitor-heading", widget.label || widget.details?.source || "Monitor"),
+            monitorValueElement(widget)
           ]);
         case "plot":
           return fragment([
@@ -5414,35 +5899,219 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
     }
 
     function renderPlotBody(widget) {
-      const csv = state.plotCsv[widget.id];
-      const points = csv ? parsePlotPoints(csv) : [];
+      const runtimePlot = state.plotData[widget.id];
+      const configurationDirty = state.dirtyPlotWidgets.has(widget.id);
+      const series = plotSeriesForWidget(widget, runtimePlot, configurationDirty);
+      const points = series.flatMap(pen => pen.points ?? []);
       const body = node("div", "plot-body" + (points.length > 0 ? " has-runtime" : ""), "");
       const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
       svg.setAttribute("class", "plot-svg");
       svg.setAttribute("viewBox", "0 0 160 120");
       svg.setAttribute("preserveAspectRatio", "none");
 
-      const xDomain = plotDomain(points, widget, "x");
-      const yDomain = plotDomain(points, widget, "y");
+      const xDomain = plotDomain(points, widget, runtimePlot, "x", configurationDirty);
+      const yDomain = plotDomain(points, widget, runtimePlot, "y", configurationDirty);
       const plotFrame = plotFrameForDomains(xDomain, yDomain);
       renderPlotAxes(svg, plotFrame, xDomain, yDomain, widget);
+      const seriesLayer = plotSeriesLayer(svg, plotFrame, widget.id);
 
-      const normalizedPoints = normalizePlotPoints(points, plotFrame, xDomain, yDomain);
       if (points.length === 0) {
         svg.append(svgText("No numeric data", 89, 50, "plot-no-data"));
-      } else if (normalizedPoints.length === 1) {
-        svg.append(svgCircle(normalizedPoints[0][0], normalizedPoints[0][1], 2.5));
       } else {
-        const polyline = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
-        polyline.setAttribute("fill", "none");
-        polyline.setAttribute("stroke", "var(--vscode-charts-blue)");
-        polyline.setAttribute("stroke-width", "2");
-        polyline.setAttribute("vector-effect", "non-scaling-stroke");
-        polyline.setAttribute("points", normalizedPoints.map(point => point.join(",")).join(" "));
-        svg.append(polyline);
+        for (const pen of series) {
+          renderPlotSeries(seriesLayer, pen, plotFrame, xDomain, yDomain);
+        }
+      }
+
+      const legendEnabled = !configurationDirty && typeof runtimePlot?.legend === "boolean"
+        ? runtimePlot.legend
+        : widget.details?.legend !== false;
+      if (legendEnabled) {
+        renderPlotLegend(svg, series.filter(pen => pen.inLegend !== false));
       }
       body.append(svg);
       return body;
+    }
+
+    function plotSeriesLayer(svg, frame, widgetId) {
+      const clipId = "plot-clip-" + String(widgetId ?? "plot").replace(/[^a-zA-Z0-9_-]/g, "-");
+      // Keep the full anti-aliased stroke visible when a series coincides with
+      // a plot boundary. The series layer is painted after the axes, but a clip
+      // that ends exactly on an axis would otherwise discard half of the line.
+      const clipPadding = 1;
+      const definitions = document.createElementNS("http://www.w3.org/2000/svg", "defs");
+      const clipPath = document.createElementNS("http://www.w3.org/2000/svg", "clipPath");
+      clipPath.setAttribute("id", clipId);
+      clipPath.setAttribute("clipPathUnits", "userSpaceOnUse");
+      const clipRect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+      clipRect.setAttribute("x", String(frame.left - clipPadding));
+      clipRect.setAttribute("y", String(frame.top - clipPadding));
+      clipRect.setAttribute("width", String(frame.right - frame.left + clipPadding * 2));
+      clipRect.setAttribute("height", String(frame.bottom - frame.top + clipPadding * 2));
+      clipPath.append(clipRect);
+      definitions.append(clipPath);
+      svg.append(definitions);
+
+      const layer = document.createElementNS("http://www.w3.org/2000/svg", "g");
+      layer.setAttribute("clip-path", "url(#" + clipId + ")");
+      svg.append(layer);
+      return layer;
+    }
+
+    function plotSeriesForWidget(widget, runtimePlot, configurationDirty) {
+      const configuredPens = Array.isArray(widget.details?.pens)
+        ? widget.details.pens.filter(pen => pen && typeof pen === "object")
+        : [];
+      const runtimePens = Array.isArray(runtimePlot?.pens) ? runtimePlot.pens : [];
+      if (runtimePens.length === 0) {
+        return configuredPens.map(pen => ({ ...pen, points: [] }));
+      }
+
+      if (configurationDirty) {
+        const usedRuntimePens = new Set();
+        return configuredPens.map((configured, index) => {
+          let runtimeIndex = runtimePens.findIndex((runtime, candidateIndex) =>
+            !usedRuntimePens.has(candidateIndex)
+            && String(runtime.name ?? "") === String(configured.name ?? "")
+          );
+          if (runtimeIndex < 0 && !usedRuntimePens.has(index) && runtimePens[index]) {
+            runtimeIndex = index;
+          }
+          if (runtimeIndex >= 0) {
+            usedRuntimePens.add(runtimeIndex);
+          }
+          const runtime = runtimeIndex >= 0 ? runtimePens[runtimeIndex] : {};
+          return {
+            ...runtime,
+            ...configured,
+            points: Array.isArray(runtime.points) ? runtime.points : []
+          };
+        });
+      }
+
+      return runtimePens.map((pen, index) => {
+        const configured = configuredPens[index] ?? {};
+        return {
+          ...configured,
+          ...pen,
+          inLegend: configured.inLegend !== false,
+          points: Array.isArray(pen.points) ? pen.points : []
+        };
+      });
+    }
+
+    function renderPlotSeries(svg, pen, frame, xDomain, yDomain) {
+      const points = Array.isArray(pen.points) ? pen.points : [];
+      const mode = Number(pen.mode ?? 0);
+      const fallbackColor = pen.color;
+      if (mode === 1) {
+        const baseline = scaleLinear(0, yDomain, frame.bottom, frame.top);
+        const interval = Number.isFinite(Number(pen.interval)) ? Number(pen.interval) : 0;
+        for (const point of points) {
+          const normalized = normalizePlotPoint(point, frame, xDomain, yDomain);
+          const barEndX = scaleLinear(point.x + interval, xDomain, frame.left, frame.right);
+          const bar = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+          bar.setAttribute("x", String(Math.min(normalized[0], barEndX)));
+          bar.setAttribute("y", String(Math.min(baseline, normalized[1])));
+          bar.setAttribute("width", String(Math.abs(barEndX - normalized[0])));
+          bar.setAttribute("height", String(Math.abs(normalized[1] - baseline)));
+          bar.setAttribute("fill", plotCssColor(point.color ?? fallbackColor));
+          bar.setAttribute("class", "plot-series-bar");
+          svg.append(bar);
+        }
+        return;
+      }
+
+      if (mode === 2) {
+        for (const point of points) {
+          const normalized = normalizePlotPoint(point, frame, xDomain, yDomain);
+          svg.append(svgPlotPoint(normalized[0], normalized[1], plotCssColor(point.color ?? fallbackColor)));
+        }
+        return;
+      }
+
+      let previous;
+      let path;
+      let pathColor;
+      let pathData = "";
+      for (const point of points) {
+        const normalized = normalizePlotPoint(point, frame, xDomain, yDomain);
+        const color = plotCssColor(point.color ?? fallbackColor);
+        if (point.penDown === false) {
+          previous = normalized;
+          path = undefined;
+          pathColor = undefined;
+          pathData = "";
+          continue;
+        }
+
+        if (!previous) {
+          svg.append(svgPlotPoint(normalized[0], normalized[1], color));
+          previous = normalized;
+          continue;
+        } else if (!path || pathColor !== color) {
+          path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+          pathColor = color;
+          pathData = "M " + previous[0] + " " + previous[1] + " L " + normalized[0] + " " + normalized[1];
+          path.setAttribute("fill", "none");
+          path.setAttribute("stroke", color);
+          path.setAttribute("stroke-width", "1");
+          path.setAttribute("vector-effect", "non-scaling-stroke");
+          path.setAttribute("d", pathData);
+          svg.append(path);
+        } else {
+          pathData += " L " + normalized[0] + " " + normalized[1];
+          path.setAttribute("d", pathData);
+        }
+        previous = normalized;
+      }
+    }
+
+    function svgPlotPoint(x, y, fill) {
+      const point = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+      point.setAttribute("x", String(x - 0.6));
+      point.setAttribute("y", String(y - 0.6));
+      point.setAttribute("width", "1.2");
+      point.setAttribute("height", "1.2");
+      point.setAttribute("fill", fill);
+      return point;
+    }
+
+    function renderPlotLegend(svg, series) {
+      const columnCount = Math.max(1, Math.ceil(series.length / 8));
+      const columnWidth = Math.min(42, 140 / columnCount);
+      const legendLeft = Math.max(8, 150 - columnWidth * columnCount);
+      series.forEach((pen, index) => {
+        const column = Math.floor(index / 8);
+        const row = index % 8;
+        const x = legendLeft + column * columnWidth;
+        const y = 9 + row * 9;
+        const swatch = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+        swatch.setAttribute("x", String(x));
+        swatch.setAttribute("y", String(y - 5));
+        swatch.setAttribute("width", "6");
+        swatch.setAttribute("height", "6");
+        swatch.setAttribute("fill", plotCssColor(pen.color));
+        swatch.setAttribute("class", "plot-legend-swatch");
+        svg.append(swatch);
+        const labelText = String(pen.name ?? "Pen");
+        const label = svgText(labelText, x + 9, y, "plot-legend-label");
+        label.setAttribute("text-anchor", "start");
+        const availableWidth = Math.max(4, columnWidth - 10);
+        if (labelText.length * 3.8 > availableWidth) {
+          label.setAttribute("textLength", String(availableWidth));
+          label.setAttribute("lengthAdjust", "spacingAndGlyphs");
+        }
+        svg.append(label);
+      });
+    }
+
+    function plotCssColor(value) {
+      const numeric = Number(value);
+      const hex = Number.isFinite(numeric) && (numeric < 0 || numeric > 140)
+        ? ((numeric >>> 0) & 0xffffff)
+        : netLogoColorHex(numeric);
+      return "#" + hex.toString(16).padStart(6, "0");
     }
 
     function renderPlotAxes(svg, frame, xDomain, yDomain, widget) {
@@ -5480,91 +6149,49 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
       svg.append(yLabel);
     }
 
-    function parsePlotPoints(csv) {
-      const points = [];
-      let inPenData = false;
-      for (const row of csv.split(/\\r?\\n/)) {
-        const cells = parseCsvLine(row);
-        if (cells.length === 0) {
-          inPenData = false;
-          continue;
-        }
-
-        if (cells[0]?.toLowerCase() === "x" && cells[1]?.toLowerCase() === "y") {
-          inPenData = true;
-          continue;
-        }
-
-        if (!inPenData) {
-          continue;
-        }
-
-        const x = Number(cells[0]);
-        const y = Number(cells[1]);
-        if (Number.isFinite(x) && Number.isFinite(y)) {
-          points.push([x, y]);
-        }
-      }
-      return points;
+    function normalizePlotPoint(point, frame, xDomain, yDomain) {
+      return [
+        scaleLinear(point.x, xDomain, frame.left, frame.right),
+        scaleLinear(point.y, yDomain, frame.bottom, frame.top)
+      ];
     }
 
-    function parseCsvLine(row) {
-      const cells = [];
-      let cell = "";
-      let quoted = false;
-      for (let index = 0; index < row.length; index += 1) {
-        const character = row[index];
-        if (quoted) {
-          if (character === '"' && row[index + 1] === '"') {
-            cell += '"';
-            index += 1;
-          } else if (character === '"') {
-            quoted = false;
-          } else {
-            cell += character;
-          }
-          continue;
-        }
-
-        if (character === '"') {
-          quoted = true;
-        } else if (character === ",") {
-          cells.push(cell.trim());
-          cell = "";
-        } else {
-          cell += character;
-        }
-      }
-      if (cell.length > 0 || row.endsWith(",")) {
-        cells.push(cell.trim());
-      }
-      return cells.filter(value => value.length > 0);
-    }
-
-    function normalizePlotPoints(points, frame, xDomain, yDomain) {
-      return points.map(point => [
-        clampPlotCoordinate(scaleLinear(point[0], xDomain, frame.left, frame.right), frame.left, frame.right),
-        clampPlotCoordinate(scaleLinear(point[1], yDomain, frame.bottom, frame.top), frame.top, frame.bottom)
-      ]);
-    }
-
-    function plotDomain(points, widget, axis) {
+    function plotDomain(points, widget, runtimePlot, axis, configurationDirty) {
       const details = widget.details ?? {};
+      const runtimeMin = Number(runtimePlot?.[axis + "Min"]);
+      const runtimeMax = Number(runtimePlot?.[axis + "Max"]);
+      if (!configurationDirty && Number.isFinite(runtimeMin) && Number.isFinite(runtimeMax) && runtimeMax > runtimeMin) {
+        return [runtimeMin, runtimeMax];
+      }
+
       const configuredMin = Number(details[axis + "Min"]);
       const configuredMax = Number(details[axis + "Max"]);
       const hasConfiguredRange = Number.isFinite(configuredMin) && Number.isFinite(configuredMax) && configuredMax > configuredMin;
-      const values = points
-        .map(point => axis === "x" ? point[0] : point[1])
-        .filter(value => Number.isFinite(value));
-      if (values.length === 0) {
+      if (details.autoplot === false && hasConfiguredRange) {
+        return [configuredMin, configuredMax];
+      }
+      let dataMin = Infinity;
+      let dataMax = -Infinity;
+      let hasFiniteValue = false;
+      for (const point of points) {
+        const value = axis === "x" ? point.x : point.y;
+        if (!Number.isFinite(value)) {
+          continue;
+        }
+        hasFiniteValue = true;
+        if (value < dataMin) {
+          dataMin = value;
+        }
+        if (value > dataMax) {
+          dataMax = value;
+        }
+      }
+      if (!hasFiniteValue) {
         if (hasConfiguredRange) {
           return [configuredMin, configuredMax];
         }
         return [0, 10];
       }
-
-      const dataMin = Math.min(...values);
-      const dataMax = Math.max(...values);
       if (hasConfiguredRange && dataMin >= configuredMin && dataMax <= configuredMax) {
         return [configuredMin, configuredMax];
       }
@@ -5580,10 +6207,6 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
       const lower = hasConfiguredRange && dataMin >= configuredMin ? configuredMin : min - padding;
       const upper = hasConfiguredRange && dataMax <= configuredMax ? configuredMax : max + padding;
       return [configuredMin === 0 && lower < 0 && dataMin >= 0 ? 0 : lower, upper];
-    }
-
-    function clampPlotCoordinate(value, min, max) {
-      return Math.min(Math.max(value, min), max);
     }
 
     function plotFrameForDomains(xDomain, yDomain) {
@@ -5655,12 +6278,12 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
       return text;
     }
 
-    function svgCircle(cx, cy, radius) {
+    function svgCircle(cx, cy, radius, fill = "var(--vscode-charts-blue)") {
       const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
       circle.setAttribute("cx", String(cx));
       circle.setAttribute("cy", String(cy));
       circle.setAttribute("r", String(radius));
-      circle.setAttribute("fill", "var(--vscode-charts-blue)");
+      circle.setAttribute("fill", fill);
       circle.setAttribute("vector-effect", "non-scaling-stroke");
       return circle;
     }
@@ -5727,6 +6350,19 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
     function finiteString(value, fallback) {
       const numeric = Number(value);
       return Number.isFinite(numeric) ? String(value) : fallback;
+    }
+
+    function monitorValueElement(widget) {
+      const value = node(
+        "div",
+        "monitor-value",
+        formatMonitorValue(state.runtimeValues[widget.id] ?? "...", widget.details?.precision)
+      );
+      const fontSize = Number(widget.details?.fontSize);
+      if (Number.isFinite(fontSize)) {
+        value.style.fontSize = clampNumber(fontSize, 8, 48) + "px";
+      }
+      return value;
     }
 
     function labelWithType(widget) {

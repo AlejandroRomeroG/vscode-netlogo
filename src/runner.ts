@@ -13,6 +13,7 @@ import {
 } from "./classicInterface";
 import { getConfiguredJvmArgs, resolveNetLogoClassPath } from "./netlogoInstallation";
 import { parseNetLogoModel } from "./modelFormat";
+import { parsePlotCsv, type ParsedPlotCsv } from "./plotCsv";
 
 export interface NetLogoRunResult {
   readonly command: string;
@@ -34,7 +35,7 @@ export interface PlotValue {
   readonly widgetId: string;
   readonly label: string;
   readonly plotName: string;
-  readonly csv: string;
+  readonly data: ParsedPlotCsv;
 }
 
 export interface View3DState {
@@ -250,7 +251,7 @@ export class NetLogoRunner implements vscode.Disposable {
           if (csv !== undefined) {
             plotValues.push({
               ...plot,
-              csv
+              data: parsePlotCsv(csv)
             });
           }
         }
@@ -291,6 +292,15 @@ export class NetLogoRunner implements vscode.Disposable {
       session.dispose();
     }
     this.sessions.clear();
+  }
+
+  public invalidate(resource: vscode.Uri): void {
+    const modelPath = resource.fsPath;
+    for (const session of [...this.sessions.values()]) {
+      if (session.matchesModelPath(modelPath)) {
+        session.dispose();
+      }
+    }
   }
 
   private async resolveResource(resource: vscode.Uri | undefined): Promise<vscode.Uri | undefined> {
@@ -444,6 +454,8 @@ export class NetLogoRunner implements vscode.Disposable {
     } catch (error) {
       this.output.appendLine(`View export failed: ${error instanceof Error ? error.message : String(error)}`);
       return undefined;
+    } finally {
+      deleteTemporaryExport(exportPath);
     }
   }
 
@@ -599,6 +611,8 @@ export class NetLogoRunner implements vscode.Disposable {
     } catch (error) {
       this.output.appendLine(`Plot export failed (${plot.plotName}): ${error instanceof Error ? error.message : String(error)}`);
       return undefined;
+    } finally {
+      deleteTemporaryExport(exportPath);
     }
   }
 
@@ -696,6 +710,10 @@ class NetLogoSession implements vscode.Disposable {
 
   public setVerboseOutput(verboseOutput: boolean): void {
     this.verboseOutput = verboseOutput;
+  }
+
+  public matchesModelPath(candidatePath: string): boolean {
+    return path.resolve(candidatePath) === path.resolve(this.modelPath);
   }
 
   public async report(reporter: string, options: NetLogoReportOptions = {}): Promise<string> {
@@ -1404,6 +1422,14 @@ function readTextFile(filePath: string): string | undefined {
     return fs.readFileSync(filePath, "utf8").trim();
   } catch {
     return undefined;
+  }
+}
+
+function deleteTemporaryExport(exportPath: string): void {
+  try {
+    fs.unlinkSync(exportPath);
+  } catch {
+    // Export files are temporary; a failed cleanup should not hide the real result.
   }
 }
 

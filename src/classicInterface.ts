@@ -10,6 +10,18 @@ export interface InterfaceBounds {
   readonly height: number;
 }
 
+export interface PlotPen {
+  readonly name: string;
+  readonly interval: number;
+  readonly mode: number;
+  readonly color: number;
+  readonly inLegend: boolean;
+  readonly setupCode: string;
+  readonly updateCode: string;
+}
+
+export type WidgetPropertyValue = string | number | boolean | readonly string[] | readonly PlotPen[];
+
 export interface InterfaceWidget {
   readonly id: string;
   readonly type: string;
@@ -21,7 +33,7 @@ export interface InterfaceWidget {
   readonly height: number;
   readonly raw: readonly string[];
   readonly runCommand?: string;
-  readonly details?: Record<string, string | number | boolean | readonly string[]>;
+  readonly details?: Record<string, WidgetPropertyValue>;
 }
 
 export interface WidgetBounds {
@@ -31,7 +43,6 @@ export interface WidgetBounds {
   readonly height: number;
 }
 
-export type WidgetPropertyValue = string | number | boolean | readonly string[];
 export type WidgetPropertyUpdates = Record<string, WidgetPropertyValue>;
 
 export interface MonitorReporter {
@@ -247,7 +258,78 @@ function updateClassicWidgetProperties(source: string, widgetId: string, updates
     }
   }
 
+  if (type === "PLOT") {
+    changed = updateClassicPlotCommands(lines, start, updates) || changed;
+    changed = updateClassicPlotPens(lines, start, updates) || changed;
+  }
+
   return changed ? lines.join(lineEnding) : source;
+}
+
+function updateClassicPlotCommands(lines: string[], start: number, updates: WidgetPropertyUpdates): boolean {
+  if (!("setupCode" in updates) && !("updateCode" in updates)) {
+    return false;
+  }
+
+  const end = findClassicWidgetEnd(lines, start);
+  const pensIndex = lines.findIndex((line, index) => index >= start && index < end && line.trim() === "PENS");
+  if (pensIndex < 0) {
+    return false;
+  }
+
+  const commandIndex = start + 14;
+  const hasCommandLine = commandIndex < pensIndex;
+  const current = hasCommandLine ? parsePlotCommands(lines[commandIndex]) : { setupCode: "", updateCode: "" };
+  const setupCode = typeof updates.setupCode === "string" ? updates.setupCode : current.setupCode;
+  const updateCode = typeof updates.updateCode === "string" ? updates.updateCode : current.updateCode;
+  const serialized = `${serializeClassicQuoted(setupCode)} ${serializeClassicQuoted(updateCode)}`;
+
+  if (!hasCommandLine) {
+    lines.splice(pensIndex, 0, serialized);
+    return true;
+  }
+
+  if (lines[commandIndex] === serialized) {
+    return false;
+  }
+
+  lines[commandIndex] = serialized;
+  return true;
+}
+
+function updateClassicPlotPens(
+  lines: string[],
+  start: number,
+  updates: WidgetPropertyUpdates
+): boolean {
+  if (!("pens" in updates) || !isPlotPenArray(updates.pens)) {
+    return false;
+  }
+
+  const end = findClassicWidgetEnd(lines, start);
+  const pensIndex = lines.findIndex((line, index) => index >= start && index < end && line.trim() === "PENS");
+  if (pensIndex < 0) {
+    return false;
+  }
+
+  let penEnd = Math.min(end, lines.length);
+  while (penEnd > pensIndex + 1 && lines[penEnd - 1].trim() === "") {
+    penEnd -= 1;
+  }
+
+  const serializedPens = updates.pens.map(serializeClassicPlotPen);
+  const currentPens = lines.slice(pensIndex + 1, penEnd);
+  if (currentPens.length === serializedPens.length && currentPens.every((line, index) => line === serializedPens[index])) {
+    return false;
+  }
+
+  lines.splice(pensIndex + 1, penEnd - pensIndex - 1, ...serializedPens);
+  return true;
+}
+
+function findClassicWidgetEnd(lines: readonly string[], start: number): number {
+  const nextWidgetIndex = lines.findIndex((line, index) => index > start && KnownClassicWidgetTypes.has(line.trim()));
+  return nextWidgetIndex < 0 ? lines.length : nextWidgetIndex;
 }
 
 function createClassicWidget(source: string, kind: AddableWidgetKind, bounds: WidgetBounds): string {
@@ -357,21 +439,27 @@ function parseClassicWidgetBlock(block: readonly string[], index: number): Inter
         })
       };
 
-    case "PLOT":
+    case "PLOT": {
+      const commands = parsePlotCommands(block[14]);
       return {
         ...baseWidget(index, type, "plot", stringAt(block, 5) || "Plot", box, block),
-        details: compactDetails({
-          xAxis: stringAt(block, 6),
-          yAxis: stringAt(block, 7),
-          xMin: numberAt(block, 8),
-          xMax: numberAt(block, 9),
-          yMin: numberAt(block, 10),
-          yMax: numberAt(block, 11),
-          autoplot: booleanAt(block, 12),
-          legend: booleanAt(block, 13),
+        details: {
+          ...compactDetails({
+            xAxis: stringAt(block, 6),
+            yAxis: stringAt(block, 7),
+            xMin: numberAt(block, 8),
+            xMax: numberAt(block, 9),
+            yMin: numberAt(block, 10),
+            yMax: numberAt(block, 11),
+            autoplot: booleanAt(block, 12),
+            legend: booleanAt(block, 13)
+          }),
+          setupCode: commands.setupCode,
+          updateCode: commands.updateCode,
           pens: parsePlotPens(block)
-        })
+        }
       };
+    }
 
     case "INPUTBOX":
       return {
@@ -435,7 +523,7 @@ function isExternal3DView(widget: InterfaceWidget): boolean {
     && widget.details?.maxPzcor !== undefined;
 }
 
-function parseClassicViewDetails(block: readonly string[]): Record<string, string | number | boolean | readonly string[]> {
+function parseClassicViewDetails(block: readonly string[]): Record<string, WidgetPropertyValue> {
   const tickCounterIndex = findClassicViewTickCounterIndex(block);
   const isThreeD = tickCounterIndex !== undefined && tickCounterIndex >= 26 && hasNumericRun(block, tickCounterIndex - 9, 6);
   const boundsStart = tickCounterIndex !== undefined
@@ -452,7 +540,8 @@ function parseClassicViewDetails(block: readonly string[]): Record<string, strin
     minPzcor: isThreeD ? numberAt(block, boundsStart + 4) : undefined,
     maxPzcor: isThreeD ? numberAt(block, boundsStart + 5) : undefined,
     updateMode: numberAt(block, updateModeIndex) === 1 ? "Tick based" : "Continuous",
-    tickCounter: tickCounterIndex !== undefined ? stringAt(block, tickCounterIndex) : undefined
+    tickCounter: tickCounterIndex !== undefined ? stringAt(block, tickCounterIndex) : undefined,
+    frameRate: tickCounterIndex !== undefined ? numberAt(block, tickCounterIndex + 1) : undefined
   });
 }
 
@@ -490,14 +579,41 @@ function hasNumericRun(block: readonly string[], start: number, length: number):
   return true;
 }
 
-function parseXmlWidgets(source: string): readonly InterfaceWidget[] {
-  const widgets: InterfaceWidget[] = [];
-  const expression = /<([a-zA-Z][\w:-]*)([^>]*)\/?>/g;
+interface XmlWidgetElement {
+  readonly tagName: string;
+  readonly attrs: Record<string, string>;
+  readonly box: Box;
+  readonly start: number;
+  readonly openingEnd: number;
+  readonly innerStart: number;
+  readonly innerEnd: number;
+  readonly end: number;
+  readonly openingTag: string;
+  readonly inner: string;
+  readonly closingTag: string;
+  readonly source: string;
+  readonly selfClosing: boolean;
+}
+
+const NonWidgetXmlTags = new Set([
+  "widgets",
+  "pen",
+  "setup",
+  "update",
+  "setupcode",
+  "updatecode",
+  "source",
+  "reporter"
+]);
+
+function findXmlWidgetElements(source: string): readonly XmlWidgetElement[] {
+  const widgets: XmlWidgetElement[] = [];
+  const expression = /<([a-zA-Z][\w:-]*)([^>]*)>/g;
   let match: RegExpExecArray | null;
 
   while ((match = expression.exec(source)) !== null) {
     const tagName = match[1].toLowerCase();
-    if (tagName === "widgets") {
+    if (NonWidgetXmlTags.has(tagName)) {
       continue;
     }
 
@@ -507,13 +623,58 @@ function parseXmlWidgets(source: string): readonly InterfaceWidget[] {
       continue;
     }
 
-    const type = tagName.toUpperCase();
-    const elementText = readXmlElementText(source, tagName, match);
-    const kind = xmlKind(tagName);
-    const label = attrs.display ?? attrs.label ?? attrs.name ?? attrs.variable ?? (kind === "button" ? elementText : undefined) ?? type;
-    const details = normalizeXmlDetails(tagName, attrs, elementText);
+    const openingTag = match[0];
+    const start = match.index;
+    const openingEnd = start + openingTag.length;
+    const selfClosing = /\/\s*>$/.test(openingTag);
+    let innerEnd = openingEnd;
+    let end = openingEnd;
+    let closingTag = "";
+
+    if (!selfClosing) {
+      const closeExpression = new RegExp(`</${escapeRegExp(tagName)}\\s*>`, "i");
+      const closeMatch = closeExpression.exec(source.slice(openingEnd));
+      if (!closeMatch || closeMatch.index === undefined) {
+        continue;
+      }
+      innerEnd = openingEnd + closeMatch.index;
+      closingTag = closeMatch[0];
+      end = innerEnd + closingTag.length;
+      expression.lastIndex = end;
+    }
+
     widgets.push({
-      id: `xml-${widgets.length}`,
+      tagName,
+      attrs,
+      box,
+      start,
+      openingEnd,
+      innerStart: openingEnd,
+      innerEnd,
+      end,
+      openingTag,
+      inner: source.slice(openingEnd, innerEnd),
+      closingTag,
+      source: source.slice(start, end),
+      selfClosing
+    });
+  }
+
+  return widgets;
+}
+
+function parseXmlWidgets(source: string): readonly InterfaceWidget[] {
+  return findXmlWidgetElements(source).map((element, index) => {
+    const { tagName, attrs, box } = element;
+    const type = tagName.toUpperCase();
+    const elementText = readXmlElementText(element);
+    const kind = xmlKind(tagName);
+    const details = normalizeXmlDetails(element, elementText);
+    const label = kind === "monitor"
+      ? ((attrs.display ?? String(details.source ?? "")) || type)
+      : attrs.display ?? attrs.label ?? attrs.name ?? attrs.variable ?? (kind === "button" || kind === "textbox" ? elementText : undefined) ?? type;
+    return {
+      id: `xml-${index}`,
       type,
       kind,
       label,
@@ -521,13 +682,11 @@ function parseXmlWidgets(source: string): readonly InterfaceWidget[] {
       y: box.y,
       width: box.width,
       height: box.height,
-      raw: [match[0]],
+      raw: [element.source],
       runCommand: xmlRunCommand(tagName, attrs, elementText),
       details
-    });
-  }
-
-  return widgets;
+    };
+  });
 }
 
 function updateXmlWidgetBounds(source: string, widgetId: string, bounds: WidgetBounds): string {
@@ -536,32 +695,13 @@ function updateXmlWidgetBounds(source: string, widgetId: string, bounds: WidgetB
     return source;
   }
 
-  const normalized = normalizeBounds(bounds);
-  const expression = /<([a-zA-Z][\w:-]*)([^>]*)\/?>/g;
-  let match: RegExpExecArray | null;
-  let widgetIndex = 0;
-
-  while ((match = expression.exec(source)) !== null) {
-    const tagName = match[1].toLowerCase();
-    if (tagName === "widgets") {
-      continue;
-    }
-
-    const attrs = parseAttributes(match[2]);
-    if (!parseXmlBox(attrs)) {
-      continue;
-    }
-
-    if (widgetIndex === targetIndex) {
-      const originalTag = match[0];
-      const updatedTag = writeXmlBounds(originalTag, attrs, normalized);
-      return source.slice(0, match.index) + updatedTag + source.slice(match.index + originalTag.length);
-    }
-
-    widgetIndex += 1;
+  const element = findXmlWidgetElements(source)[targetIndex];
+  if (!element) {
+    return source;
   }
 
-  return source;
+  const updatedTag = writeXmlBounds(element.openingTag, element.attrs, normalizeBounds(bounds));
+  return replaceXmlOpeningTag(source, element, updatedTag);
 }
 
 function updateXmlWidgetProperties(source: string, widgetId: string, updates: WidgetPropertyUpdates): string {
@@ -570,44 +710,23 @@ function updateXmlWidgetProperties(source: string, widgetId: string, updates: Wi
     return source;
   }
 
-  const expression = /<([a-zA-Z][\w:-]*)([^>]*)\/?>/g;
-  let match: RegExpExecArray | null;
-  let widgetIndex = 0;
-
-  while ((match = expression.exec(source)) !== null) {
-    const tagName = match[1].toLowerCase();
-    if (tagName === "widgets") {
-      continue;
-    }
-
-    const attrs = parseAttributes(match[2]);
-    if (!parseXmlBox(attrs)) {
-      continue;
-    }
-
-    if (widgetIndex === targetIndex) {
-      let updatedTag = match[0];
-      for (const [property, value] of Object.entries(updates)) {
-        const attrName = xmlPropertyAttributeName(attrs, tagName, property);
-        if (attrName) {
-          updatedTag = writeXmlAttr(updatedTag, attrName, serializeXmlProperty(value));
-        }
-      }
-      return source.slice(0, match.index) + updatedTag + source.slice(match.index + match[0].length);
-    }
-
-    widgetIndex += 1;
+  const element = findXmlWidgetElements(source)[targetIndex];
+  if (!element) {
+    return source;
   }
 
-  return source;
+  const updatedElement = updateXmlElementProperties(element, updates);
+  return updatedElement === element.source
+    ? source
+    : source.slice(0, element.start) + updatedElement + source.slice(element.end);
 }
 
 function createXmlWidget(source: string, kind: AddableWidgetKind, bounds: WidgetBounds): string {
   const tag = xmlWidgetTemplate(kind, normalizeBounds(bounds));
   const lineEnding = source.includes("\r\n") ? "\r\n" : "\n";
 
-  if (/<\/widgets>\s*$/i.test(source)) {
-    return source.replace(/<\/widgets>\s*$/i, `${lineEnding}  ${tag}${lineEnding}</widgets>`);
+  if (/<\/widgets>/i.test(source)) {
+    return source.replace(/<\/widgets>/i, `${lineEnding}  ${tag}${lineEnding}</widgets>`);
   }
 
   if (source.trim().length === 0) {
@@ -623,31 +742,13 @@ function deleteXmlWidget(source: string, widgetId: string): string {
     return source;
   }
 
-  const expression = /<([a-zA-Z][\w:-]*)([^>]*)\/?>/g;
-  let match: RegExpExecArray | null;
-  let widgetIndex = 0;
-
-  while ((match = expression.exec(source)) !== null) {
-    const tagName = match[1].toLowerCase();
-    if (tagName === "widgets") {
-      continue;
-    }
-
-    const attrs = parseAttributes(match[2]);
-    if (!parseXmlBox(attrs)) {
-      continue;
-    }
-
-    if (widgetIndex === targetIndex) {
-      const start = match.index;
-      const end = source[match.index + match[0].length] === "\n" ? match.index + match[0].length + 1 : match.index + match[0].length;
-      return source.slice(0, start) + source.slice(end);
-    }
-
-    widgetIndex += 1;
+  const element = findXmlWidgetElements(source)[targetIndex];
+  if (!element) {
+    return source;
   }
 
-  return source;
+  const end = source[element.end] === "\n" ? element.end + 1 : element.end;
+  return source.slice(0, element.start) + source.slice(end);
 }
 
 function baseWidget(
@@ -745,7 +846,169 @@ function writeXmlBounds(tag: string, attrs: Record<string, string>, bounds: Widg
     "x", bounds.x),
     "y", bounds.y),
     "width", bounds.width),
-    "height", bounds.height);
+      "height", bounds.height);
+}
+
+function replaceXmlOpeningTag(source: string, element: XmlWidgetElement, updatedTag: string): string {
+  return source.slice(0, element.start) + updatedTag + source.slice(element.openingEnd);
+}
+
+function updateXmlElementProperties(element: XmlWidgetElement, updates: WidgetPropertyUpdates): string {
+  let openingTag = element.openingTag;
+  let inner = element.inner;
+  let needsChildren = false;
+
+  for (const [property, value] of Object.entries(updates)) {
+    if (element.tagName === "plot" && property === "autoplot" && typeof value === "boolean") {
+      openingTag = writeXmlAttr(openingTag, xmlExistingAttrName(element.attrs, ["autoPlotX", "auto-plot-x"]) ?? "autoPlotX", String(value));
+      openingTag = writeXmlAttr(openingTag, xmlExistingAttrName(element.attrs, ["autoPlotY", "auto-plot-y"]) ?? "autoPlotY", String(value));
+      continue;
+    }
+
+    if (element.tagName === "plot" && (property === "setupCode" || property === "updateCode") && typeof value === "string") {
+      const officialName = property === "setupCode" ? "setup" : "update";
+      const childName = hasXmlPlotChild(inner, officialName)
+        ? officialName
+        : hasXmlPlotChild(inner, property) ? property : officialName;
+      inner = writeXmlChildText(inner, childName, value, xmlChildIndent(element));
+      needsChildren = true;
+      continue;
+    }
+
+    if (element.tagName === "plot" && property === "pens" && isPlotPenArray(value)) {
+      inner = writeXmlPlotPens(inner, value, xmlChildIndent(element));
+      needsChildren = true;
+      continue;
+    }
+
+    if (element.tagName === "monitor" && property === "source" && typeof value === "string") {
+      const childName = hasXmlChild(inner, "source") ? "source" : hasXmlChild(inner, "reporter") ? "reporter" : undefined;
+      if (childName) {
+        inner = writeXmlChildText(inner, childName, value, xmlChildIndent(element));
+        needsChildren = true;
+        continue;
+      }
+      if (!element.selfClosing && readXmlElementText(element) !== undefined) {
+        inner = writeXmlDirectText(inner, value);
+        needsChildren = true;
+        continue;
+      }
+    }
+
+    const attrName = xmlPropertyAttributeName(element.attrs, element.tagName, property);
+    if (attrName && !Array.isArray(value)) {
+      openingTag = writeXmlAttr(openingTag, attrName, serializeXmlProperty(value));
+    }
+  }
+
+  if (element.selfClosing && needsChildren) {
+    const expandedOpening = openingTag.replace(/\/\s*>$/, ">");
+    return `${expandedOpening}${inner}</${element.tagName}>`;
+  }
+
+  return `${openingTag}${inner}${element.closingTag}`;
+}
+
+function xmlExistingAttrName(attrs: Record<string, string>, candidates: readonly string[]): string | undefined {
+  return candidates.find(name => name in attrs);
+}
+
+function xmlChildIndent(element: XmlWidgetElement): string {
+  const lineStart = element.source.lastIndexOf("\n", Math.max(0, element.openingTag.length - 1));
+  const outerIndent = lineStart >= 0
+    ? element.source.slice(lineStart + 1).match(/^\s*/)?.[0] ?? ""
+    : "";
+  const existingIndent = element.inner.match(/\n([ \t]+)<(?:setup|update|setupCode|updateCode|pen)\b/i)?.[1];
+  return existingIndent ?? `${outerIndent}  `;
+}
+
+function hasXmlChild(inner: string, childName: string): boolean {
+  return new RegExp(`<${escapeRegExp(childName)}\\b`, "i").test(inner);
+}
+
+function hasXmlPlotChild(inner: string, childName: string): boolean {
+  return hasXmlChild(withoutXmlPlotPens(inner), childName);
+}
+
+function writeXmlChildText(inner: string, childName: string, value: string, indent: string): string {
+  const expression = new RegExp(`(<${escapeRegExp(childName)}\\b[^>]*>)([\\s\\S]*?)(</${escapeRegExp(childName)}\\s*>)`, "i");
+  const match = expression.exec(inner);
+  if (match && match.index !== undefined) {
+    const content = /^\s*<!\[CDATA\[/.test(match[2]) && !value.includes("]]>")
+      ? `<![CDATA[${value}]]>`
+      : encodeXmlText(value);
+    return inner.slice(0, match.index) + match[1] + content + match[3] + inner.slice(match.index + match[0].length);
+  }
+
+  return appendXmlChild(inner, `<${childName}>${encodeXmlText(value)}</${childName}>`, indent);
+}
+
+function writeXmlDirectText(inner: string, value: string): string {
+  const content = /^\s*<!\[CDATA\[/.test(inner) && !value.includes("]]>")
+    ? `<![CDATA[${value}]]>`
+    : encodeXmlText(value);
+  const leading = inner.match(/^\s*/)?.[0] ?? "";
+  const trailing = inner.match(/\s*$/)?.[0] ?? "";
+  return `${leading}${content}${trailing}`;
+}
+
+function writeXmlPlotPens(inner: string, pens: readonly PlotPen[], indent: string): string {
+  if (samePlotPens(parseXmlPlotPens(inner), pens)) {
+    return inner;
+  }
+
+  const expression = /<pen\b[^>]*?(?:\/\s*>|>[\s\S]*?<\/pen\s*>)/gi;
+  const matches = Array.from(inner.matchAll(expression));
+  const serialized = pens.map(pen => serializeXmlPlotPen(pen, indent)).join(`\n${indent}`);
+  if (matches.length > 0) {
+    const first = matches[0];
+    const last = matches[matches.length - 1];
+    const start = first.index ?? 0;
+    const end = (last.index ?? 0) + last[0].length;
+    return inner.slice(0, start) + serialized + inner.slice(end);
+  }
+
+  return serialized ? appendXmlChild(inner, serialized, indent) : inner;
+}
+
+function serializeXmlPlotPen(pen: PlotPen, indent: string): string {
+  const attrs = [
+    `display="${encodeXmlAttribute(pen.name)}"`,
+    `interval="${encodeXmlAttribute(String(pen.interval))}"`,
+    `mode="${pen.mode}"`,
+    `color="${pen.color}"`,
+    `legend="${pen.inLegend}"`
+  ].join(" ");
+  const childIndent = `${indent}  `;
+  return [
+    `<pen ${attrs}>`,
+    `${childIndent}<setup>${encodeXmlText(pen.setupCode)}</setup>`,
+    `${childIndent}<update>${encodeXmlText(pen.updateCode)}</update>`,
+    `${indent}</pen>`
+  ].join("\n");
+}
+
+function appendXmlChild(inner: string, child: string, indent: string): string {
+  const lineEnding = inner.includes("\r\n") ? "\r\n" : "\n";
+  const trailingWhitespace = inner.match(/\s*$/)?.[0] ?? "";
+  const body = inner.slice(0, inner.length - trailingWhitespace.length);
+  const separator = body.length === 0 ? `${lineEnding}${indent}` : `${lineEnding}${indent}`;
+  const closingIndent = trailingWhitespace.includes("\n") ? trailingWhitespace : lineEnding;
+  return `${body}${separator}${child}${closingIndent}`;
+}
+
+function samePlotPens(left: readonly PlotPen[], right: readonly PlotPen[]): boolean {
+  return left.length === right.length && left.every((pen, index) => {
+    const other = right[index];
+    return other !== undefined
+      && pen.name === other.name
+      && pen.interval === other.interval
+      && pen.mode === other.mode
+      && pen.color === other.color
+      && pen.inLegend === other.inLegend
+      && pen.setupCode === other.setupCode
+      && pen.updateCode === other.updateCode;
+  });
 }
 
 function writeXmlAttr(tag: string, name: string, value: string | number): string {
@@ -757,6 +1020,13 @@ function writeXmlAttr(tag: string, name: string, value: string | number): string
 
   const insertAt = tag.endsWith("/>") ? tag.length - 2 : tag.length - 1;
   return `${tag.slice(0, insertAt)} ${name}="${escapedValue}"${tag.slice(insertAt)}`;
+}
+
+function encodeXmlText(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
 }
 
 function getBounds(widgets: readonly InterfaceWidget[]): InterfaceBounds {
@@ -777,20 +1047,13 @@ function parseAttributes(source: string): Record<string, string> {
   return attrs;
 }
 
-function readXmlElementText(source: string, tagName: string, match: RegExpExecArray): string | undefined {
-  if (/\/\s*>$/.test(match[0])) {
+function readXmlElementText(element: XmlWidgetElement): string | undefined {
+  if (element.selfClosing) {
     return undefined;
   }
 
-  const start = match.index + match[0].length;
-  const closeExpression = new RegExp(`</${escapeRegExp(tagName)}>`, "i");
-  const closeMatch = source.slice(start).match(closeExpression);
-  if (!closeMatch || closeMatch.index === undefined) {
-    return undefined;
-  }
-
-  const text = source.slice(start, start + closeMatch.index).trim();
-  return text ? decodeXml(text) : undefined;
+  const text = element.inner.trim();
+  return text && !/<[a-zA-Z][\w:-]*(?:\s|>)/.test(text) ? decodeXmlText(text) : undefined;
 }
 
 function xmlRunCommand(tagName: string, attrs: Record<string, string>, elementText?: string): string | undefined {
@@ -801,8 +1064,9 @@ function xmlRunCommand(tagName: string, attrs: Record<string, string>, elementTe
   return xmlKind(tagName) === "button" ? elementText : undefined;
 }
 
-function normalizeXmlDetails(tagName: string, attrs: Record<string, string>, elementText?: string): Record<string, string | number | boolean | readonly string[]> {
-  const details: Record<string, string | number | boolean | readonly string[]> = { ...attrs };
+function normalizeXmlDetails(element: XmlWidgetElement, elementText?: string): Record<string, WidgetPropertyValue> {
+  const { tagName, attrs } = element;
+  const details: Record<string, WidgetPropertyValue> = { ...attrs };
   const kind = xmlKind(tagName);
 
   if (kind === "button") {
@@ -827,10 +1091,90 @@ function normalizeXmlDetails(tagName: string, attrs: Record<string, string>, ele
   }
 
   if (kind === "monitor") {
+    details.source = xmlMonitorSource(element, elementText);
     details.precision = parseMaybeNumber(attrs.precision);
+    details.fontSize = parseMaybeNumber(attrs.fontSize ?? attrs["font-size"]);
+  }
+
+  if (kind === "textbox") {
+    details.text = attrs.text ?? elementText ?? attrs.display ?? "";
+    details.fontSize = parseMaybeNumber(attrs.fontSize ?? attrs["font-size"]);
+  }
+
+  if (kind === "plot") {
+    const autoPlotX = parseXmlBoolean(attrs.autoPlotX ?? attrs["auto-plot-x"] ?? attrs.autoplot);
+    const autoPlotY = parseXmlBoolean(attrs.autoPlotY ?? attrs["auto-plot-y"] ?? attrs.autoplot);
+    Object.assign(details, compactDetails({
+      xAxis: attrs.xAxis ?? attrs["x-axis"] ?? attrs.xLabel,
+      yAxis: attrs.yAxis ?? attrs["y-axis"] ?? attrs.yLabel,
+      xMin: parseMaybeNumber(attrs.xMin ?? attrs["x-min"]),
+      xMax: parseMaybeNumber(attrs.xMax ?? attrs["x-max"]),
+      yMin: parseMaybeNumber(attrs.yMin ?? attrs["y-min"]),
+      yMax: parseMaybeNumber(attrs.yMax ?? attrs["y-max"]),
+      autoplot: autoPlotX && autoPlotY,
+      legend: parseXmlBoolean(attrs.legend)
+    }));
+    details.setupCode = readXmlPlotChildText(element.inner, "setup") ?? readXmlPlotChildText(element.inner, "setupCode") ?? "";
+    details.updateCode = readXmlPlotChildText(element.inner, "update") ?? readXmlPlotChildText(element.inner, "updateCode") ?? "";
+    details.pens = parseXmlPlotPens(element.inner);
   }
 
   return details;
+}
+
+function xmlMonitorSource(element: XmlWidgetElement, elementText?: string): string {
+  return element.attrs.source
+    ?? element.attrs.reporter
+    ?? readXmlChildText(element.inner, "source")
+    ?? readXmlChildText(element.inner, "reporter")
+    ?? elementText
+    ?? "";
+}
+
+function readXmlChildText(inner: string, childName: string): string | undefined {
+  const expression = new RegExp(`<${escapeRegExp(childName)}\\b[^>]*>([\\s\\S]*?)</${escapeRegExp(childName)}\\s*>`, "i");
+  const match = expression.exec(inner);
+  return match ? decodeXmlText(match[1]) : undefined;
+}
+
+function readXmlPlotChildText(inner: string, childName: string): string | undefined {
+  return readXmlChildText(withoutXmlPlotPens(inner), childName);
+}
+
+function withoutXmlPlotPens(inner: string): string {
+  return inner.replace(/<pen\b[^>]*?(?:\/\s*>|>[\s\S]*?<\/pen\s*>)/gi, "");
+}
+
+function decodeXmlText(value: string): string {
+  const trimmed = value.trim();
+  const cdata = /^<!\[CDATA\[([\s\S]*)\]\]>$/.exec(trimmed);
+  return cdata ? cdata[1] : decodeXml(trimmed);
+}
+
+function parseXmlPlotPens(inner: string): readonly PlotPen[] {
+  const pens: PlotPen[] = [];
+  const expression = /<pen\b([^>]*?)(?:\/\s*>|>([\s\S]*?)<\/pen\s*>)/gi;
+  let match: RegExpExecArray | null;
+  while ((match = expression.exec(inner)) !== null) {
+    const attrs = parseAttributes(match[1]);
+    const interval = Number(attrs.interval);
+    const mode = Number(attrs.mode);
+    const color = Number(attrs.color);
+    if (!Number.isFinite(interval) || !Number.isInteger(mode) || !Number.isInteger(color)) {
+      continue;
+    }
+    const penInner = match[2] ?? "";
+    pens.push({
+      name: attrs.display ?? attrs.name ?? "",
+      interval,
+      mode,
+      color,
+      inLegend: parseXmlBoolean(attrs.legend),
+      setupCode: readXmlChildText(penInner, "setup") ?? readXmlChildText(penInner, "setupCode") ?? "",
+      updateCode: readXmlChildText(penInner, "update") ?? readXmlChildText(penInner, "updateCode") ?? ""
+    });
+  }
+  return pens;
 }
 
 function parseMaybeNumber(value: string | undefined): string | number {
@@ -865,7 +1209,17 @@ function classicPropertyOffsets(type: string): Record<string, number> {
     case "MONITOR":
       return { label: 5, source: 6, precision: 7 };
     case "PLOT":
-      return { label: 5, xAxis: 6, yAxis: 7, xMin: 8, xMax: 9, yMin: 10, yMax: 11 };
+      return {
+        label: 5,
+        xAxis: 6,
+        yAxis: 7,
+        xMin: 8,
+        xMax: 9,
+        yMin: 10,
+        yMax: 11,
+        autoplot: 12,
+        legend: 13
+      };
     case "INPUTBOX":
       return { label: 5, variable: 5, value: 6, multiline: 7 };
     case "TEXTBOX":
@@ -1043,17 +1397,20 @@ function xmlWidgetTemplate(kind: AddableWidgetKind, bounds: WidgetBounds): strin
       break;
     case "monitor":
       attrs.display = "monitor";
-      attrs.source = "ticks";
       attrs.precision = "0";
+      attrs.fontSize = "11";
       break;
     case "plot":
-      attrs.name = "Plot";
+      attrs.display = "Plot";
       attrs.xAxis = "x";
       attrs.yAxis = "y";
       attrs.xMin = "0";
       attrs.xMax = "10";
       attrs.yMin = "0";
       attrs.yMax = "10";
+      attrs.autoPlotX = "true";
+      attrs.autoPlotY = "true";
+      attrs.legend = "true";
       break;
     case "input":
       attrs.variable = "input";
@@ -1071,6 +1428,12 @@ function xmlWidgetTemplate(kind: AddableWidgetKind, bounds: WidgetBounds): strin
   const serializedAttrs = Object.entries(attrs)
     .map(([name, value]) => `${name}="${encodeXmlAttribute(String(value))}"`)
     .join(" ");
+  if (kind === "monitor") {
+    return `<${tagName} ${serializedAttrs}>ticks</${tagName}>`;
+  }
+  if (kind === "plot") {
+    return `<${tagName} ${serializedAttrs}><setup></setup><update></update></${tagName}>`;
+  }
   return `<${tagName} ${serializedAttrs} />`;
 }
 
@@ -1085,7 +1448,9 @@ function widgetRuntimeCommand(widget: InterfaceWidget): string | undefined {
     case "chooser": {
       const choices = details.choices;
       const selectedIndex = typeof details.selectedIndex === "number" ? details.selectedIndex : Number(details.selectedIndex);
-      const selected = Array.isArray(choices) && Number.isInteger(selectedIndex) ? choices[selectedIndex] : undefined;
+      const selected = choices !== undefined && isStringArray(choices) && Number.isInteger(selectedIndex)
+        ? choices[selectedIndex]
+        : undefined;
       return setCommand(details.variable, selected);
     }
     case "input":
@@ -1095,8 +1460,8 @@ function widgetRuntimeCommand(widget: InterfaceWidget): string | undefined {
   }
 }
 
-function setCommand(variable: string | number | boolean | readonly string[] | undefined, value: WidgetPropertyValue | undefined): string | undefined {
-  if (typeof variable !== "string" || !isNetLogoIdentifier(variable) || value === undefined) {
+function setCommand(variable: WidgetPropertyValue | undefined, value: WidgetPropertyValue | undefined): string | undefined {
+  if (typeof variable !== "string" || !isNetLogoIdentifier(variable) || value === undefined || !isRuntimePropertyValue(value)) {
     return undefined;
   }
 
@@ -1107,7 +1472,7 @@ function isNetLogoIdentifier(value: string): boolean {
   return /^[A-Za-z_?*=!<>:#%$^&+\-/~.][A-Za-z0-9_?*=!<>:#%$^&+\-/~.]*$/.test(value);
 }
 
-function toNetLogoLiteral(value: WidgetPropertyValue): string {
+function toNetLogoLiteral(value: RuntimePropertyValue): string {
   if (typeof value === "number") {
     return String(value);
   }
@@ -1117,7 +1482,7 @@ function toNetLogoLiteral(value: WidgetPropertyValue): string {
   }
 
   if (typeof value !== "string") {
-    return `[${value.map(toNetLogoLiteral).join(" ")}]`;
+    return `[${value.map(item => toNetLogoLiteral(item)).join(" ")}]`;
   }
 
   const trimmed = value.trim();
@@ -1132,6 +1497,15 @@ function toNetLogoLiteral(value: WidgetPropertyValue): string {
   return `"${trimmed.replace(/\\/g, "\\\\").replace(/"/g, "\\\"")}"`;
 }
 
+type RuntimePropertyValue = string | number | boolean | readonly string[];
+
+function isRuntimePropertyValue(value: WidgetPropertyValue): value is RuntimePropertyValue {
+  return typeof value === "string"
+    || typeof value === "number"
+    || typeof value === "boolean"
+    || isStringArray(value);
+}
+
 function serializeClassicProperty(type: string, property: string, value: WidgetPropertyValue): string {
   if (type === "SWITCH" && property === "on") {
     return value ? "0" : "1";
@@ -1141,11 +1515,59 @@ function serializeClassicProperty(type: string, property: string, value: WidgetP
     return value ? "T" : "NIL";
   }
 
-  if (property === "choices" && Array.isArray(value)) {
+  if (property === "choices" && isStringArray(value)) {
     return `[${value.map(serializeLogoListItem).join(" ")}]`;
   }
 
   return String(value);
+}
+
+function serializeClassicPlotPen(pen: PlotPen): string {
+  return [
+    serializeClassicQuoted(pen.name),
+    serializeClassicDouble(pen.interval),
+    String(pen.mode),
+    String(pen.color),
+    String(pen.inLegend),
+    serializeClassicQuoted(pen.setupCode),
+    serializeClassicQuoted(pen.updateCode)
+  ].join(" ");
+}
+
+function serializeClassicDouble(value: number): string {
+  return Number.isInteger(value) ? `${value}.0` : String(value);
+}
+
+function serializeClassicQuoted(value: string): string {
+  const escaped = value
+    .replace(/\\/g, "\\\\")
+    .replace(/\r\n?/g, "\n")
+    .replace(/\n/g, "\\n")
+    .replace(/"/g, "\\\"");
+  return `"${escaped}"`;
+}
+
+function isStringArray(value: WidgetPropertyValue): value is readonly string[] {
+  return Array.isArray(value) && value.every(item => typeof item === "string");
+}
+
+function isPlotPenArray(value: WidgetPropertyValue): value is readonly PlotPen[] {
+  return Array.isArray(value) && value.every(item => isPlotPen(item));
+}
+
+function isPlotPen(value: unknown): value is PlotPen {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const pen = value as Partial<PlotPen>;
+  return typeof pen.name === "string"
+    && typeof pen.interval === "number" && Number.isFinite(pen.interval)
+    && typeof pen.mode === "number" && Number.isInteger(pen.mode)
+    && typeof pen.color === "number" && Number.isInteger(pen.color)
+    && typeof pen.inLegend === "boolean"
+    && typeof pen.setupCode === "string"
+    && typeof pen.updateCode === "string";
 }
 
 function serializeLogoListItem(value: string): string {
@@ -1165,7 +1587,7 @@ function xmlPropertyAttributeName(attrs: Record<string, string>, tagName: string
     if ("name" in attrs) {
       return "name";
     }
-    return tagName === "plot" ? "name" : "display";
+    return "display";
   }
 
   const candidates: Record<string, readonly string[]> = {
@@ -1186,6 +1608,7 @@ function xmlPropertyAttributeName(attrs: Record<string, string>, tagName: string
     xMax: ["xMax", "x-max"],
     yMin: ["yMin", "y-min"],
     yMax: ["yMax", "y-max"],
+    legend: ["legend"],
     text: ["text", "display"],
     fontSize: ["fontSize", "font-size"],
     patchSize: ["patchSize", "patch-size"],
@@ -1210,6 +1633,7 @@ function serializeXmlProperty(value: WidgetPropertyValue): string {
 function xmlKind(tagName: string): WidgetKind {
   switch (tagName.toLowerCase()) {
     case "view":
+    case "view3d":
     case "graphics-window":
     case "graphicswindow":
       return "view";
@@ -1230,6 +1654,7 @@ function xmlKind(tagName: string): WidgetKind {
       return "input";
     case "textbox":
     case "text":
+    case "note":
       return "textbox";
     case "output":
       return "output";
@@ -1238,25 +1663,94 @@ function xmlKind(tagName: string): WidgetKind {
   }
 }
 
-function parsePlotPens(block: readonly string[]): readonly string[] | undefined {
+function parsePlotCommands(source: string | undefined): { readonly setupCode: string; readonly updateCode: string } {
+  const tokens = tokenizeRespectingQuotes(source ?? "");
+  return {
+    setupCode: tokens[0] ?? "",
+    updateCode: tokens[1] ?? ""
+  };
+}
+
+function parsePlotPens(block: readonly string[]): readonly PlotPen[] {
   const pensIndex = block.findIndex(line => line.trim() === "PENS");
   if (pensIndex < 0) {
-    return undefined;
+    return [];
   }
 
   return block
     .slice(pensIndex + 1)
-    .map(line => tokenizeRespectingQuotes(line)[0])
-    .filter((name): name is string => Boolean(name));
+    .map(parsePlotPen)
+    .filter((pen): pen is PlotPen => pen !== undefined);
+}
+
+function parsePlotPen(source: string): PlotPen | undefined {
+  const tokens = tokenizeRespectingQuotes(source);
+  const interval = Number(tokens[1]);
+  const mode = Number(tokens[2]);
+  const color = Number(tokens[3]);
+  const inLegend = parseBooleanToken(tokens[4]);
+  if (tokens[0] === undefined || !Number.isFinite(interval) || !Number.isInteger(mode) || !Number.isInteger(color) || inLegend === undefined) {
+    return undefined;
+  }
+
+  return {
+    name: tokens[0],
+    interval,
+    mode,
+    color,
+    inLegend,
+    setupCode: tokens[5] ?? "",
+    updateCode: tokens[6] ?? ""
+  };
 }
 
 function tokenizeRespectingQuotes(source: string): readonly string[] {
   const tokens: string[] = [];
-  const expression = /"((?:\\"|[^"])*)"|(\S+)/g;
-  let match: RegExpExecArray | null;
+  let index = 0;
+  while (index < source.length) {
+    while (/\s/.test(source[index] ?? "")) {
+      index += 1;
+    }
+    if (index >= source.length) {
+      break;
+    }
 
-  while ((match = expression.exec(source)) !== null) {
-    tokens.push(cleanDisplayValue(match[1] ?? match[2] ?? ""));
+    if (source[index] !== "\"") {
+      const start = index;
+      while (index < source.length && !/\s/.test(source[index])) {
+        index += 1;
+      }
+      tokens.push(cleanDisplayValue(source.slice(start, index)));
+      continue;
+    }
+
+    index += 1;
+    let value = "";
+    while (index < source.length) {
+      const character = source[index];
+      if (character === "\"") {
+        index += 1;
+        break;
+      }
+      if (character !== "\\" || index + 1 >= source.length) {
+        value += character;
+        index += 1;
+        continue;
+      }
+
+      const escaped = source[index + 1];
+      if (escaped === "n") {
+        value += "\n";
+      } else if (escaped === "\"") {
+        value += "\"";
+      } else if (escaped === "\\") {
+        value += "\\";
+      } else {
+        value += `\\${escaped}`;
+      }
+      index += 2;
+    }
+    tokens.push(value);
   }
 
   return tokens;
@@ -1273,9 +1767,9 @@ function parseLogoList(value: string | undefined): readonly string[] | undefined
 }
 
 function compactDetails(
-  details: Record<string, string | number | boolean | readonly string[] | undefined>
-): Record<string, string | number | boolean | readonly string[]> {
-  const compacted: Record<string, string | number | boolean | readonly string[]> = {};
+  details: Record<string, WidgetPropertyValue | undefined>
+): Record<string, WidgetPropertyValue> {
+  const compacted: Record<string, WidgetPropertyValue> = {};
   for (const [key, value] of Object.entries(details)) {
     if (value !== undefined && value !== "" && (!Array.isArray(value) || value.length > 0)) {
       compacted[key] = value;
@@ -1314,7 +1808,11 @@ function cleanDisplayValue(value: string): string {
 }
 
 function booleanAt(block: readonly string[], index: number): boolean | undefined {
-  const raw = block[index]?.trim().toLowerCase();
+  return parseBooleanToken(block[index]);
+}
+
+function parseBooleanToken(value: string | undefined): boolean | undefined {
+  const raw = value?.trim().toLowerCase();
   if (raw === undefined) {
     return undefined;
   }

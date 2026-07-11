@@ -666,7 +666,9 @@ function codeSectionOffsets(text: string, fileName: string): CodeSectionOffsets 
 }
 
 function isXmlText(text: string, fileName: string): boolean {
-  return fileName.toLowerCase().endsWith(".nlogox") || /^\s*<\?xml[\s\S]*<netlogo/i.test(text) || /^\s*<netlogo/i.test(text);
+  return fileName.toLowerCase().endsWith(".nlogox")
+    || /^\s*<\?xml[\s\S]*<(?:model|netlogo)\b/i.test(text)
+    || /^\s*<(?:model|netlogo)\b/i.test(text);
 }
 
 function stripInlineComment(line: string): string {

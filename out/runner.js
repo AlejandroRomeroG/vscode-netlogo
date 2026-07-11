@@ -50,6 +50,7 @@ const vscode = __importStar(require("vscode"));
 const classicInterface_1 = require("./classicInterface");
 const netlogoInstallation_1 = require("./netlogoInstallation");
 const modelFormat_1 = require("./modelFormat");
+const plotCsv_1 = require("./plotCsv");
 const DEFAULT_COMMAND_TIMEOUT_MS = 60000;
 const DRAWING_3D_RENDER_LIMIT = 160000;
 function formatNetLogoErrorMessage(error) {
@@ -148,7 +149,7 @@ class NetLogoRunner {
                     if (csv !== undefined) {
                         plotValues.push({
                             ...plot,
-                            csv
+                            data: (0, plotCsv_1.parsePlotCsv)(csv)
                         });
                     }
                 }
@@ -184,6 +185,14 @@ class NetLogoRunner {
             session.dispose();
         }
         this.sessions.clear();
+    }
+    invalidate(resource) {
+        const modelPath = resource.fsPath;
+        for (const session of [...this.sessions.values()]) {
+            if (session.matchesModelPath(modelPath)) {
+                session.dispose();
+            }
+        }
     }
     async resolveResource(resource) {
         if (resource instanceof vscode.Uri) {
@@ -305,6 +314,9 @@ class NetLogoRunner {
         catch (error) {
             this.output.appendLine(`View export failed: ${error instanceof Error ? error.message : String(error)}`);
             return undefined;
+        }
+        finally {
+            deleteTemporaryExport(exportPath);
         }
     }
     async tryReportTicks(session) {
@@ -435,6 +447,9 @@ class NetLogoRunner {
             this.output.appendLine(`Plot export failed (${plot.plotName}): ${error instanceof Error ? error.message : String(error)}`);
             return undefined;
         }
+        finally {
+            deleteTemporaryExport(exportPath);
+        }
     }
 }
 exports.NetLogoRunner = NetLogoRunner;
@@ -504,6 +519,9 @@ class NetLogoSession {
     }
     setVerboseOutput(verboseOutput) {
         this.verboseOutput = verboseOutput;
+    }
+    matchesModelPath(candidatePath) {
+        return path.resolve(candidatePath) === path.resolve(this.modelPath);
     }
     async report(reporter, options = {}) {
         const next = this.commandChain.catch(() => undefined).then(() => this.reportNow(reporter, options));
@@ -1098,6 +1116,14 @@ function readTextFile(filePath) {
     }
     catch {
         return undefined;
+    }
+}
+function deleteTemporaryExport(exportPath) {
+    try {
+        fs.unlinkSync(exportPath);
+    }
+    catch {
+        // Export files are temporary; a failed cleanup should not hide the real result.
     }
 }
 function exactArrayBuffer(value) {

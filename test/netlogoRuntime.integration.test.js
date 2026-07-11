@@ -8,6 +8,7 @@ const {
   detectNetLogoInstallations,
   installationFromHome
 } = require("../out/netlogoInstallation");
+const { parsePlotCsv } = require("../out/plotCsv");
 
 const root = path.join(__dirname, "..");
 const configuredHome = process.env.NETLOGO_HOME;
@@ -142,6 +143,63 @@ test("Java bridge runs turtle-context model commands used by Termites", {
     assert.doesNotMatch(run.stdout, /__NETLOGO_ERROR__/);
     const reports = [...run.stdout.matchAll(/__NETLOGO_REPORT__([^\n]+)/g)].map(match => Buffer.from(match[1], "base64").toString("utf8"));
     assert.equal(Number(reports[0]) > 0, true);
+  } finally {
+    fs.rmSync(classesDir, { recursive: true, force: true });
+  }
+});
+
+test("Java bridge exports every Rabbits Grass Weeds plot pen with native metadata", {
+  skip: detectedInstallation && hasBiologySampleModel(detectedInstallation.home, "Rabbits Grass Weeds.nlogo")
+    ? false
+    : "No local Rabbits Grass Weeds sample model detected"
+}, () => {
+  const classesDir = fs.mkdtempSync(path.join(os.tmpdir(), "netlogo-bridge-rabbits-integration-"));
+  try {
+    const classPath = detectedInstallation.classPath.join(path.delimiter);
+    const bridgePath = path.join(root, "resources", "java", "NetLogoCommandBridge.java");
+    const compile = spawnSync("javac", ["-cp", classPath, "-d", classesDir, bridgePath], {
+      encoding: "utf8"
+    });
+    assert.equal(compile.status, 0, compile.stderr || compile.stdout);
+
+    const exportPath = path.join(classesDir, "populations.csv");
+    const runtimeClassPath = [classesDir, ...detectedInstallation.classPath].join(path.delimiter);
+    const input = [
+      commandLine("COMMAND", "setup"),
+      commandLine("COMMAND", "repeat 4 [ go ]"),
+      commandLine("REPORT", "count rabbits"),
+      exportPlotLine("Populations", exportPath)
+    ].join("\n") + "\n";
+
+    const run = spawnSync("java", [
+      ...detectedInstallation.jvmArgs,
+      "-cp",
+      runtimeClassPath,
+      "NetLogoCommandBridge",
+      path.join(detectedInstallation.home, "models", "Sample Models", "Biology", "Rabbits Grass Weeds.nlogo")
+    ], {
+      input,
+      encoding: "utf8",
+      maxBuffer: 4 * 1024 * 1024
+    });
+
+    assert.equal(run.status, 0, run.stderr || run.stdout);
+    assert.doesNotMatch(run.stdout, /__NETLOGO_ERROR__/);
+    const monitorReports = [...run.stdout.matchAll(/__NETLOGO_REPORT__([^\n]+)/g)]
+      .map(match => Buffer.from(match[1], "base64").toString("utf8"));
+    assert.equal(Number(monitorReports[0]) > 0, true);
+
+    const plotExport = run.stdout.match(/__NETLOGO_PLOT__([^\n]+)/);
+    assert.ok(plotExport, "NetLogo did not return the Populations plot export");
+    const plot = parsePlotCsv(Buffer.from(plotExport[1], "base64").toString("utf8"));
+    assert.equal(plot.name, "Populations");
+    assert.equal(plot.numberOfPens, 3);
+    assert.equal(plot.yMin, 0);
+    assert.equal(plot.yMax, 150);
+    assert.equal(plot.legend, true);
+    assert.deepEqual(plot.pens.map(pen => pen.name), ["grass", "rabbits", "weeds"]);
+    assert.deepEqual(plot.pens.map(pen => pen.color), [55, 15, 115]);
+    assert.equal(plot.pens.every(pen => pen.points.length >= 5), true);
   } finally {
     fs.rmSync(classesDir, { recursive: true, force: true });
   }

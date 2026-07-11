@@ -12,6 +12,60 @@ const {
   updateInterfaceWidgetProperties
 } = require("../out/classicInterface");
 
+const rabbitsPlotLines = [
+  "PLOT",
+  "4",
+  "228",
+  "275",
+  "424",
+  "Populations",
+  "Time",
+  "Pop",
+  "0.0",
+  "100.0",
+  "0.0",
+  "111.0",
+  "true",
+  "true",
+  "\"set-plot-y-range 0 number\" \"\"",
+  "PENS",
+  "\"grass\" 1.0 0 -10899396 true \"\" \"plot count patches with [pcolor = green] / 4\"",
+  "\"rabbits\" 1.0 0 -2674135 true \"\" \"plot count rabbits\"",
+  "\"weeds\" 1.0 0 -8630108 true \"\" \"plot count patches with [pcolor = violet] / 4\""
+];
+
+const rabbitsMonitorLines = [
+  "MONITOR",
+  "186",
+  "424",
+  "275",
+  "469",
+  "count rabbits",
+  "count rabbits",
+  "1",
+  "1",
+  "11"
+];
+
+const netLogo7PlotXml = [
+  "<widgets>",
+  "  <monitor x=\"186\" y=\"424\" width=\"89\" height=\"45\" precision=\"1\" fontSize=\"11\" display=\"count rabbits\" source=\"count rabbits\" />",
+  "  <plot x=\"4\" y=\"228\" width=\"271\" height=\"196\" display=\"Populations\" xAxis=\"Time\" yAxis=\"Pop\" xMin=\"0.0\" xMax=\"100.0\" yMin=\"0.0\" yMax=\"111.0\" autoPlotX=\"true\" autoPlotY=\"true\" legend=\"true\">",
+  "    <setupCode><![CDATA[set-plot-y-range 0 (number + 10)]]></setupCode>",
+  "    <updateCode>set-current-plot &quot;Populations&quot;</updateCode>",
+  "    <pen display=\"grass\" interval=\"1.0\" mode=\"0\" color=\"-10899396\" legend=\"true\">",
+  "      <setupCode></setupCode>",
+  "      <updateCode>plot count patches with [pcolor = green] / 4</updateCode>",
+  "    </pen>",
+  "    <pen display=\"rabbits\" interval=\"1.0\" mode=\"0\" color=\"-2674135\" legend=\"true\">",
+  "      <setupCode>set-plot-pen-interval 1</setupCode>",
+  "      <updateCode><![CDATA[plot count turtles with [xcor < 0]]]></updateCode>",
+  "    </pen>",
+  "  </plot>",
+  "  <button x=\"80\" y=\"69\" width=\"85\" height=\"45\" forever=\"false\">setup</button>",
+  "</widgets>"
+].join("\n");
+
 test("parses common classic NetLogo widgets with typed details", () => {
   const source = [
     "GRAPHICS-WINDOW",
@@ -135,7 +189,64 @@ test("parses common classic NetLogo widgets with typed details", () => {
   assert.equal(widgets[2].details.units, "%");
   assert.equal(widgets[3].details.on, true);
   assert.deepEqual(widgets[4].details.choices, ["slow mode", "fast"]);
-  assert.equal(widgets[6].details.pens[0], "turtles");
+  assert.equal(widgets[6].details.setupCode, "");
+  assert.equal(widgets[6].details.updateCode, "");
+  assert.deepEqual(widgets[6].details.pens, [{
+    name: "turtles",
+    interval: 1,
+    mode: 0,
+    color: -16777216,
+    inLegend: true,
+    setupCode: "",
+    updateCode: ""
+  }]);
+});
+
+test("parses all classic plot and pen fields from Rabbits Grass Weeds", () => {
+  const [plot] = parseClassicWidgets(rabbitsPlotLines.join("\n"));
+
+  assert.equal(plot.label, "Populations");
+  assert.deepEqual(plot.details, {
+    xAxis: "Time",
+    yAxis: "Pop",
+    xMin: 0,
+    xMax: 100,
+    yMin: 0,
+    yMax: 111,
+    autoplot: true,
+    legend: true,
+    setupCode: "set-plot-y-range 0 number",
+    updateCode: "",
+    pens: [
+      {
+        name: "grass",
+        interval: 1,
+        mode: 0,
+        color: -10899396,
+        inLegend: true,
+        setupCode: "",
+        updateCode: "plot count patches with [pcolor = green] / 4"
+      },
+      {
+        name: "rabbits",
+        interval: 1,
+        mode: 0,
+        color: -2674135,
+        inLegend: true,
+        setupCode: "",
+        updateCode: "plot count rabbits"
+      },
+      {
+        name: "weeds",
+        interval: 1,
+        mode: 0,
+        color: -8630108,
+        inLegend: true,
+        setupCode: "",
+        updateCode: "plot count patches with [pcolor = violet] / 4"
+      }
+    ]
+  });
 });
 
 test("parses modern classic 2D view bounds", () => {
@@ -175,6 +286,7 @@ test("parses modern classic 2D view bounds", () => {
   assert.equal(view.details.minPycor, -35);
   assert.equal(view.details.maxPycor, 35);
   assert.equal(view.details.tickCounter, "ticks");
+  assert.equal(view.details.frameRate, 30);
 });
 
 test("parses 3D view bounds", () => {
@@ -217,6 +329,7 @@ test("parses 3D view bounds", () => {
   assert.equal(view.details.maxPycor, 20);
   assert.equal(view.details.minPzcor, -12);
   assert.equal(view.details.maxPzcor, 12);
+  assert.equal(view.details.frameRate, 30);
 });
 
 test("moves external 3D views to the right of controls in the preview", () => {
@@ -406,6 +519,114 @@ test("parses NetLogo 7 xml buttons and slider defaults", () => {
   assert.equal(preview.widgets[2].details.forever, true);
 });
 
+test("keeps NetLogo 7 view3d, note, and bounded extension widgets in the preview", () => {
+  const source = [
+    "<widgets>",
+    "  <view3d x=\"300\" y=\"10\" width=\"420\" height=\"420\" />",
+    "  <note x=\"10\" y=\"10\" width=\"240\" height=\"50\" fontSize=\"14\">Rabbits &amp; grass</note>",
+    "  <extension-widget x=\"10\" y=\"80\" width=\"200\" height=\"40\" display=\"Custom\" />",
+    "</widgets>"
+  ].join("\n");
+  const preview = parseInterfacePreview(source, "xml");
+
+  assert.equal(preview.widgets.length, 3);
+  assert.equal(preview.widgets[0].kind, "view");
+  assert.equal(preview.widgets[1].kind, "textbox");
+  assert.equal(preview.widgets[1].label, "Rabbits & grass");
+  assert.equal(preview.widgets[1].details.text, "Rabbits & grass");
+  assert.equal(preview.widgets[1].details.fontSize, 14);
+  assert.equal(preview.widgets[2].kind, "generic");
+  assert.equal(preview.widgets[2].label, "Custom");
+});
+
+test("parses NetLogo 7 monitor and complete plot children without treating them as widgets", () => {
+  const preview = parseInterfacePreview(netLogo7PlotXml, "xml");
+
+  assert.equal(preview.widgets.length, 3);
+  const [monitor, plot, button] = preview.widgets;
+  assert.equal(monitor.kind, "monitor");
+  assert.equal(monitor.label, "count rabbits");
+  assert.equal(monitor.details.source, "count rabbits");
+  assert.equal(monitor.details.precision, 1);
+  assert.equal(monitor.details.fontSize, 11);
+  assert.equal(plot.kind, "plot");
+  assert.equal(plot.label, "Populations");
+  assert.equal(plot.details.xAxis, "Time");
+  assert.equal(plot.details.yAxis, "Pop");
+  assert.equal(plot.details.xMin, 0);
+  assert.equal(plot.details.xMax, 100);
+  assert.equal(plot.details.yMin, 0);
+  assert.equal(plot.details.yMax, 111);
+  assert.equal(plot.details.autoplot, true);
+  assert.equal(plot.details.legend, true);
+  assert.equal(plot.details.setupCode, "set-plot-y-range 0 (number + 10)");
+  assert.equal(plot.details.updateCode, "set-current-plot \"Populations\"");
+  assert.deepEqual(plot.details.pens, [
+    {
+      name: "grass",
+      interval: 1,
+      mode: 0,
+      color: -10899396,
+      inLegend: true,
+      setupCode: "",
+      updateCode: "plot count patches with [pcolor = green] / 4"
+    },
+    {
+      name: "rabbits",
+      interval: 1,
+      mode: 0,
+      color: -2674135,
+      inLegend: true,
+      setupCode: "set-plot-pen-interval 1",
+      updateCode: "plot count turtles with [xcor < 0]"
+    }
+  ]);
+  assert.equal(button.kind, "button");
+  assert.equal(button.runCommand, "setup");
+});
+
+test("uses a NetLogo 7 monitor source as its title when display is absent", () => {
+  const source = "<monitor x=\"1\" y=\"2\" width=\"90\" height=\"45\" reporter=\"count turtles\" precision=\"0\" fontSize=\"12\" />";
+  const [monitor] = parseInterfacePreview(source, "xml").widgets;
+
+  assert.equal(monitor.label, "count turtles");
+  assert.equal(monitor.details.source, "count turtles");
+
+  const updated = updateInterfaceWidgetProperties(source, "xml", "xml-0", { source: "count links" });
+  assert.match(updated, /reporter="count links"/);
+  assert.doesNotMatch(updated, /\ssource=/);
+  assert.equal(parseInterfacePreview(updated, "xml").widgets[0].details.source, "count links");
+});
+
+test("parses and updates official NetLogo 7 setup update aliases and monitor element source", () => {
+  const source = [
+    "<widgets>",
+    "  <monitor x=\"186\" y=\"424\" width=\"89\" height=\"45\" precision=\"1\" fontSize=\"11\" display=\"count rabbits\">count rabbits</monitor>",
+    "  <plot x=\"4\" y=\"228\" width=\"271\" height=\"196\" display=\"Populations\" xAxis=\"Time\" yAxis=\"Pop\" xMin=\"0.0\" xMax=\"100.0\" yMin=\"0.0\" yMax=\"111.0\" autoPlotX=\"true\" autoPlotY=\"true\" legend=\"true\">",
+    "    <setup>set-plot-y-range 0 number</setup>",
+    "    <update></update>",
+    "    <pen display=\"rabbits\" interval=\"1.0\" mode=\"0\" color=\"-2674135\" legend=\"true\"><setup></setup><update>plot count rabbits</update></pen>",
+    "  </plot>",
+    "</widgets>"
+  ].join("\n");
+  const [monitor, plot] = parseInterfacePreview(source, "xml").widgets;
+
+  assert.equal(monitor.details.source, "count rabbits");
+  assert.equal(plot.details.setupCode, "set-plot-y-range 0 number");
+  assert.equal(plot.details.updateCode, "");
+  assert.equal(plot.details.pens[0].updateCode, "plot count rabbits");
+
+  const updatedMonitor = updateInterfaceWidgetProperties(source, "xml", "xml-0", { source: "count rabbits + 1" });
+  assert.match(updatedMonitor, />count rabbits \+ 1<\/monitor>/);
+  const updatedPlot = updateInterfaceWidgetProperties(updatedMonitor, "xml", "xml-1", {
+    setupCode: "set-plot-y-range 0 (number + 1)",
+    updateCode: "set-current-plot \"Populations\""
+  });
+  assert.match(updatedPlot, /<setup>set-plot-y-range 0 \(number \+ 1\)<\/setup>/);
+  assert.match(updatedPlot, /<update>set-current-plot "Populations"<\/update>/);
+  assert.doesNotMatch(updatedPlot, /<setupCode>|<updateCode>/);
+});
+
 test("updates classic widget bounds while preserving widget content", () => {
   const source = [
     "BUTTON",
@@ -564,6 +785,82 @@ test("updates classic slider and switch properties", () => {
   assert.equal(widgets[1].details.on, false);
 });
 
+test("round-trips the classic Rabbits plot without rewriting its pen block", () => {
+  const source = [...rabbitsPlotLines, "", ...rabbitsMonitorLines].join("\n");
+  const [plot] = parseClassicWidgets(source);
+  const updated = updateInterfaceWidgetProperties(source, "classic", plot.id, {
+    autoplot: plot.details.autoplot,
+    legend: plot.details.legend,
+    setupCode: plot.details.setupCode,
+    updateCode: plot.details.updateCode,
+    pens: plot.details.pens
+  });
+
+  assert.equal(updated, source);
+});
+
+test("round-trips classic plot pens whose names are empty or whitespace-sensitive", () => {
+  const source = [
+    ...rabbitsPlotLines.slice(0, -3),
+    '"" 1.0 0 -16777216 true "" "plot 1"',
+    '" a" 1.0 0 -10899396 true "" "plot 2"',
+    '"a " 1.0 0 -2674135 true "" "plot 3"'
+  ].join("\n");
+  const [plot] = parseClassicWidgets(source);
+
+  assert.deepEqual(plot.details.pens.map(pen => pen.name), ["", " a", "a "]);
+  const updated = updateInterfaceWidgetProperties(source, "classic", plot.id, {
+    pens: plot.details.pens
+  });
+  assert.equal(updated, source);
+});
+
+test("atomically updates classic plot commands and pens while preserving the following widget", () => {
+  const source = [...rabbitsPlotLines, "", ...rabbitsMonitorLines].join("\n");
+  const pens = [
+    {
+      name: "rabbits \"total\"",
+      interval: 0.5,
+      mode: 2,
+      color: -2674135,
+      inLegend: true,
+      setupCode: "set-plot-pen-color red",
+      updateCode: "set-current-plot-pen \"rabbits\"\nplot count rabbits"
+    },
+    {
+      name: "weeds",
+      interval: 2,
+      mode: 1,
+      color: -8630108,
+      inLegend: false,
+      setupCode: "",
+      updateCode: "plot count patches with [pcolor = violet] / 4"
+    }
+  ];
+
+  const updated = updateInterfaceWidgetProperties(source, "classic", "classic-0", {
+    label: "Populations 2",
+    autoplot: false,
+    legend: false,
+    setupCode: "set-plot-y-range 0 (number + 10)",
+    updateCode: "set-current-plot-pen \"rabbits\"",
+    pens
+  });
+  const [plot, monitor] = parseClassicWidgets(updated);
+
+  assert.equal(plot.label, "Populations 2");
+  assert.equal(plot.details.autoplot, false);
+  assert.equal(plot.details.legend, false);
+  assert.equal(plot.details.setupCode, "set-plot-y-range 0 (number + 10)");
+  assert.equal(plot.details.updateCode, "set-current-plot-pen \"rabbits\"");
+  assert.deepEqual(plot.details.pens, pens);
+  assert.deepEqual(monitor.raw, rabbitsMonitorLines);
+  assert.equal(monitor.label, "count rabbits");
+  assert.doesNotMatch(updated, /^"grass"/m);
+  assert.match(updated, /^"rabbits \\"total\\"" 0\.5 2 -2674135 true /m);
+  assert.match(updated, /"set-current-plot-pen \\"rabbits\\"\\nplot count rabbits"/);
+});
+
 test("updates xml widget properties", () => {
   const source = "<button left=\"10\" top=\"20\" right=\"100\" bottom=\"50\" display=\"setup\" code=\"setup\" />";
   const updated = updateInterfaceWidgetProperties(source, "xml", "xml-0", {
@@ -573,6 +870,98 @@ test("updates xml widget properties", () => {
 
   assert.match(updated, /display="start &amp; reset"/);
   assert.match(updated, /code="setup reset-ticks"/);
+});
+
+test("updates NetLogo 7 monitor fields and preserves the neighboring plot exactly", () => {
+  const originalPlot = netLogo7PlotXml.slice(
+    netLogo7PlotXml.indexOf("  <plot"),
+    netLogo7PlotXml.indexOf("  <button")
+  );
+  const updated = updateInterfaceWidgetProperties(netLogo7PlotXml, "xml", "xml-0", {
+    label: "Rabbit population",
+    source: "count rabbits with [energy > 0]",
+    precision: 0,
+    fontSize: 13
+  });
+  const [monitor] = parseInterfacePreview(updated, "xml").widgets;
+
+  assert.equal(monitor.label, "Rabbit population");
+  assert.equal(monitor.details.source, "count rabbits with [energy > 0]");
+  assert.equal(monitor.details.precision, 0);
+  assert.equal(monitor.details.fontSize, 13);
+  assert.ok(updated.includes(originalPlot));
+});
+
+test("updates all editable NetLogo 7 plot fields and pens while preserving sibling widgets", () => {
+  const originalMonitor = netLogo7PlotXml.match(/^  <monitor.*$/m)[0];
+  const originalButton = netLogo7PlotXml.match(/^  <button.*$/m)[0];
+  const pens = [
+    {
+      name: "rabbits & hares",
+      interval: 0.5,
+      mode: 2,
+      color: -2674135,
+      inLegend: true,
+      setupCode: "set-plot-pen-color red",
+      updateCode: "plot count rabbits with [energy < 5]"
+    },
+    {
+      name: "weeds",
+      interval: 2,
+      mode: 1,
+      color: -8630108,
+      inLegend: false,
+      setupCode: "",
+      updateCode: "plot count patches with [pcolor = violet] / 4"
+    }
+  ];
+
+  const updated = updateInterfaceWidgetProperties(netLogo7PlotXml, "xml", "xml-1", {
+    label: "Population & food",
+    xAxis: "Steps",
+    yAxis: "Agents",
+    xMin: -10,
+    xMax: 250,
+    yMin: -5,
+    yMax: 500,
+    autoplot: false,
+    legend: false,
+    setupCode: "set-plot-y-range 0 (number + 25)",
+    updateCode: "set-current-plot \"Population & food\"",
+    pens
+  });
+  const [, plot] = parseInterfacePreview(updated, "xml").widgets;
+
+  assert.equal(plot.label, "Population & food");
+  assert.equal(plot.details.xAxis, "Steps");
+  assert.equal(plot.details.yAxis, "Agents");
+  assert.equal(plot.details.xMin, -10);
+  assert.equal(plot.details.xMax, 250);
+  assert.equal(plot.details.yMin, -5);
+  assert.equal(plot.details.yMax, 500);
+  assert.equal(plot.details.autoplot, false);
+  assert.equal(plot.details.legend, false);
+  assert.equal(plot.details.setupCode, "set-plot-y-range 0 (number + 25)");
+  assert.equal(plot.details.updateCode, "set-current-plot \"Population & food\"");
+  assert.deepEqual(plot.details.pens, pens);
+  assert.match(updated, /autoPlotX="false"/);
+  assert.match(updated, /autoPlotY="false"/);
+  assert.match(updated, /display="Population &amp; food"/);
+  assert.match(updated, /<setupCode><!\[CDATA\[set-plot-y-range 0 \(number \+ 25\)\]\]><\/setupCode>/);
+  assert.match(updated, /<updateCode>set-current-plot "Population &amp; food"<\/updateCode>/);
+  assert.match(updated, /<pen display="rabbits &amp; hares"/);
+  assert.ok(updated.includes(originalMonitor));
+  assert.ok(updated.includes(originalButton));
+});
+
+test("does not rewrite NetLogo 7 plot CDATA, entities, or pens for attribute-only edits", () => {
+  const originalInner = netLogo7PlotXml.match(/(<plot\b[^>]*>)([\s\S]*?)(<\/plot>)/)[2];
+  const updated = updateInterfaceWidgetProperties(netLogo7PlotXml, "xml", "xml-1", { xAxis: "Model time" });
+  const updatedInner = updated.match(/(<plot\b[^>]*>)([\s\S]*?)(<\/plot>)/)[2];
+
+  assert.equal(updatedInner, originalInner);
+  assert.match(updatedInner, /<!\[CDATA\[set-plot-y-range/);
+  assert.match(updatedInner, /&quot;Populations&quot;/);
 });
 
 test("creates and deletes classic widgets", () => {
@@ -624,6 +1013,30 @@ test("creates and deletes xml widgets", () => {
   preview = parseInterfacePreview(deleted, "xml");
   assert.equal(preview.widgets.length, 1);
   assert.equal(preview.widgets[0].kind, "switch");
+});
+
+test("creates NetLogo 7 monitor and plot widgets with official element structure", () => {
+  let source = createInterfaceWidget("<model>\n<widgets>\n</widgets>\n<code>to go\nend</code>\n</model>", "xml", "monitor", {
+    x: 10,
+    y: 20,
+    width: 90,
+    height: 45
+  });
+  source = createInterfaceWidget(source, "xml", "plot", {
+    x: 10,
+    y: 70,
+    width: 270,
+    height: 190
+  });
+
+  assert.match(source, /<monitor\b[^>]*fontSize="11"[^>]*>ticks<\/monitor>/);
+  assert.match(source, /<plot\b[^>]*display="Plot"[^>]*autoPlotX="true"[^>]*autoPlotY="true"[^>]*legend="true"[^>]*><setup><\/setup><update><\/update><\/plot>/);
+  assert.match(source, /<\/widgets>\n<code>to go\nend<\/code>/);
+  const [monitor, plot] = parseInterfacePreview(source, "xml").widgets;
+  assert.equal(monitor.details.source, "ticks");
+  assert.equal(plot.details.setupCode, "");
+  assert.equal(plot.details.updateCode, "");
+  assert.deepEqual(plot.details.pens, []);
 });
 
 test("builds runtime set commands for interactive widgets", () => {

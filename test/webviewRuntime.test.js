@@ -21,7 +21,7 @@ test("webview exposes a controllable forever run loop", () => {
   assert.match(source, /id="speedLabel" class="speed-label">normal speed<\/span>/);
   assert.match(source, /class="speed-normal-mark" aria-hidden="true"/);
   assert.match(source, /id="speedSlider"/);
-  assert.match(source, /min="-10" max="10" step="1"/);
+  assert.match(source, /min="-110" max="112" step="1"/);
   assert.match(source, /id="tickCount"/);
   assert.match(source, /foreverButton\.textContent = running \? "Stop" : "Forever"/);
   assert.match(source, /foreverButton\.classList\.toggle\("running", running\)/);
@@ -70,15 +70,23 @@ test("webview exposes a controllable forever run loop", () => {
   assert.match(source, /function scheduleRunLoop\(\)/);
   assert.match(source, /function runLoopDelayMs\(\)/);
   assert.match(source, /function runLoopBatchSize\(\)/);
-  assert.match(source, /RUN_SPEED_NORMAL_DELAY_MS = 20/);
-  assert.match(source, /RUN_SPEED_BATCHES = \[2, 4, 8, 16, 24, 32, 48, 64, 96, 128\]/);
-  assert.ok(source.indexOf("const RUN_SPEED_MIN") < source.indexOf("const state = {"));
+  assert.match(source, /RUN_SPEED_DEFAULT_FRAME_RATE = 30/);
+  assert.match(source, /RUN_SPEED_MAX_BATCH = 256/);
+  assert.ok(source.indexOf("const RUN_SPEED_RAW_MIN") < source.indexOf("const state = {"));
+  assert.match(source, /function runSpeedPosition\(\)/);
+  assert.match(source, /defaultFrameRate \+ speed - 1 \+ Math\.pow\(1\.3, speed\)/);
+  assert.match(source, /defaultFrameRate \* Math\.pow\(0\.9, -speed\)/);
+  assert.match(source, /Math\.pow\(Math\.pow\(9000, 0\.02\), -speed\)/);
+  assert.match(source, /speed <= 25/);
+  assert.match(source, /Math\.min\(RUN_SPEED_MAX_BATCH, Math\.max\(1, tickGap\)\)/);
+  assert.match(source, /loop\.requestStartedAt = performance\.now\(\)/);
+  assert.match(source, /Math\.max\(0, runLoopDelayMs\(\) - requestElapsed\)/);
   assert.match(source, /function runSpeedLabel\(\)/);
   assert.match(source, /return "normal speed"/);
   assert.match(source, /return "faster"/);
   assert.match(source, /return "slower"/);
   assert.match(source, /speedLabel\.textContent = label/);
-  assert.match(source, /runLoopDelayMs\(\)\)/);
+  assert.match(source, /\}, remainingDelay\)/);
   assert.match(source, /postRunCommand\(loop\.command, true, runLoopBatchSize\(\)\)/);
   assert.match(source, /readonly repeat\?: number/);
   assert.match(source, /const executionCommand = repeat > 1 \? `repeat \$\{repeat\} \[ \$\{command\} \]` : command/);
@@ -103,6 +111,9 @@ test("webview separates Interface interaction from layout editing", () => {
   assert.match(source, /id="layoutModeButton"/);
   assert.match(source, /interfaceMode: validInterfaceMode\(restoredUiState\.interfaceMode\)/);
   assert.match(source, /function setInterfaceMode\(mode\)/);
+  assert.match(source, /if \(state\.interfaceMode === "interact"\) \{\s*state\.selectedWidgetId = null;\s*\}/);
+  assert.match(source, /deleteWidgetButton\.hidden = state\.interfaceMode !== "layout"/);
+  assert.match(source, /id="deleteWidgetButton" type="button" hidden disabled/);
   assert.match(source, /state\.interfaceMode !== "layout"/);
   assert.match(source, /runWidgetButton\(widget\)/);
   assert.match(source, /surface\.classList\.toggle\("interact-mode"/);
@@ -478,6 +489,7 @@ test("webview persists local editor and 3D viewer preferences", () => {
   assert.match(source, /infoEditing: Boolean\(restoredUiState\.infoEditing\)/);
   assert.match(source, /interfaceMode: validInterfaceMode\(restoredUiState\.interfaceMode\)/);
   assert.match(source, /runSpeed: restoredRunSpeed\(restoredUiState\.runSpeed\)/);
+  assert.match(source, /runSpeedScaleVersion: 2/);
   assert.match(source, /function restoredThreeBackground\(restored\)/);
   assert.match(source, /restored\.threeBackgroundPreferenceVersion === 1/);
   assert.match(source, /threeBackgroundPreferenceVersion: 1/);
@@ -491,7 +503,7 @@ test("webview persists local editor and 3D viewer preferences", () => {
   assert.match(source, /activateTab\(state\.activeTab\)/);
   assert.match(source, /speedSlider\.value = String\(state\.runSpeed\)/);
   assert.match(source, /function clampRunSpeed\(value\)/);
-  assert.match(source, /clampNumber\(Math\.round\(Number\(value\)\), RUN_SPEED_MIN, RUN_SPEED_MAX\)/);
+  assert.match(source, /clampNumber\(Math\.round\(Number\(value\)\), RUN_SPEED_RAW_MIN, RUN_SPEED_RAW_MAX\)/);
 });
 
 test("vendored Three.js module dependencies are packaged", () => {
@@ -505,12 +517,56 @@ test("vendored Three.js module dependencies are packaged", () => {
   }
 });
 
-test("webview parses NetLogo export-plot CSV data rows", () => {
+test("runner parses complete NetLogo export-plot CSV data before posting it to the webview", () => {
+  const runnerSource = fs.readFileSync(path.join(root, "src", "runner.ts"), "utf8");
+  const webviewSource = fs.readFileSync(path.join(root, "src", "netlogoEditor.ts"), "utf8");
+
+  assert.match(runnerSource, /import \{ parsePlotCsv, type ParsedPlotCsv \} from "\.\/plotCsv"/);
+  assert.match(runnerSource, /readonly data: ParsedPlotCsv/);
+  assert.match(runnerSource, /data: parsePlotCsv\(csv\)/);
+  assert.match(webviewSource, /state\.plotData\[plot\.widgetId\] = plot\.data \?\? null/);
+  assert.match(webviewSource, /function plotSeriesForWidget\(widget, runtimePlot, configurationDirty\)/);
+  assert.match(webviewSource, /for \(const pen of series\) \{\s*renderPlotSeries/);
+});
+
+test("webview renders plot pen colors, modes, legends, and exposes the full pen editor", () => {
   const source = fs.readFileSync(path.join(root, "src", "netlogoEditor.ts"), "utf8");
 
-  assert.match(source, /function parseCsvLine\(row\)/);
-  assert.match(source, /cells\[0\]\?\.toLowerCase\(\) === "x" && cells\[1\]\?\.toLowerCase\(\) === "y"/);
-  assert.match(source, /points\.push\(\[x, y\]\)/);
+  assert.match(source, /function renderPlotSeries\(svg, pen, frame, xDomain, yDomain\)/);
+  assert.match(source, /if \(mode === 1\)/);
+  assert.match(source, /if \(mode === 2\)/);
+  assert.match(source, /if \(point\.penDown === false\)/);
+  assert.match(source, /point\.x \+ interval/);
+  assert.match(source, /Math\.abs\(barEndX - normalized\[0\]\)/);
+  assert.match(source, /function svgPlotPoint\(x, y, fill\)/);
+  assert.match(source, /plotCssColor\(point\.color \?\? fallbackColor\)/);
+  assert.match(source, /function renderPlotLegend\(svg, series\)/);
+  assert.match(source, /runtimePlot\?\.legend/);
+  assert.match(source, /pen\.inLegend !== false/);
+  assert.match(source, /function renderPlotPensEditor\(widget\)/);
+  assert.match(source, /"Add pen"/);
+  assert.match(source, /"Pen setup commands"/);
+  assert.match(source, /"Pen update commands"/);
+  assert.match(source, /function plotPalette\(\)/);
+  assert.match(source, /commitWidgetProperties\(widget, "pens", nextPens\)/);
+  assert.match(source, /descriptor\("autoplot", "Auto scale"/);
+  assert.match(source, /descriptor\("legend", "Show legend"/);
+  assert.match(source, /descriptor\("setupCode", "Plot setup commands"/);
+  assert.match(source, /descriptor\("updateCode", "Plot update commands"/);
+  assert.match(source, /state\.dirtyPlotWidgets\.add\(widget\.id\)/);
+  assert.match(source, /Plot definition changed\. Run Setup to reload the model workspace\./);
+});
+
+test("monitor widgets show their reporter title and format numeric values like NetLogo", () => {
+  const source = fs.readFileSync(path.join(root, "src", "netlogoEditor.ts"), "utf8");
+
+  assert.match(source, /node\("div", "monitor-heading", widget\.label \|\| widget\.details\?\.source \|\| "Monitor"\)/);
+  assert.match(source, /function formatMonitorValue\(value, precision\)/);
+  assert.match(source, /function netLogoMonitorApproximate\(value, decimalPlaces\)/);
+  assert.match(source, /Math\.floor\(value \* scale \+ 0\.5\) \/ scale/);
+  assert.match(source, /function groupMonitorDecimal\(source\)/);
+  assert.match(source, /formatMonitorValue\(state\.runtimeValues\[widget\.id\] \?\? "\.\.\."/);
+  assert.match(source, /\.monitor-widget\s*\{[\s\S]*?grid-template-rows: auto minmax\(0, 1fr\)/);
 });
 
 test("webview plots include axes ticks and axis titles", () => {
@@ -524,17 +580,23 @@ test("webview plots include axes ticks and axis titles", () => {
   assert.match(source, /axisLabel\(widget\.details\?\.yAxis, "y"\)/);
 });
 
-test("webview plot domains expand to include exported data", () => {
+test("webview plot domains honor exact runtime ranges and expand configured fallbacks", () => {
   const source = fs.readFileSync(path.join(root, "src", "netlogoEditor.ts"), "utf8");
 
-  assert.match(source, /function plotDomain\(points, widget, axis\)/);
-  assert.match(source, /\.filter\(value => Number\.isFinite\(value\)\)/);
+  assert.match(source, /function plotDomain\(points, widget, runtimePlot, axis, configurationDirty\)/);
+  assert.match(source, /runtimePlot\?\.\[axis \+ "Min"\]/);
+  assert.match(source, /runtimePlot\?\.\[axis \+ "Max"\]/);
+  assert.match(source, /for \(const point of points\)/);
+  assert.match(source, /if \(!Number\.isFinite\(value\)\)/);
+  assert.doesNotMatch(source, /Math\.(?:min|max)\(\.\.\.values\)/);
   assert.match(source, /dataMin >= configuredMin && dataMax <= configuredMax/);
   assert.match(source, /return \[configuredMin, configuredMax\]/);
   assert.match(source, /Math\.min\(dataMin, configuredMin\)/);
   assert.match(source, /Math\.max\(dataMax, configuredMax\)/);
-  assert.match(source, /function clampPlotCoordinate\(value, min, max\)/);
-  assert.match(source, /clampPlotCoordinate\(scaleLinear\(point\[1\], yDomain, frame\.bottom, frame\.top\), frame\.top, frame\.bottom\)/);
+  assert.match(source, /function plotSeriesLayer\(svg, frame, widgetId\)/);
+  assert.match(source, /clipPath\.setAttribute\("clipPathUnits", "userSpaceOnUse"\)/);
+  assert.match(source, /scaleLinear\(point\.y, yDomain, frame\.bottom, frame\.top\)/);
+  assert.doesNotMatch(source, /function clampPlotCoordinate/);
 });
 
 test("webview plot ticks use grouped labels and dynamic margins", () => {

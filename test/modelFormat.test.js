@@ -49,6 +49,26 @@ test("nlogox parser edits cdata text and raw widget XML", () => {
   assert.match(serialized, /<!\[CDATA\[# Updated <info>\]\]>/);
 });
 
+test("detects the NetLogo 7 model root and inserts missing XML sections inside it", () => {
+  const text = [
+    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>",
+    "<model version=\"NetLogo 7.0.0\">",
+    "  <code>to setup\nend</code>",
+    "  <widgets><monitor x=\"1\" y=\"2\" width=\"100\" height=\"60\">ticks</monitor></widgets>",
+    "</model>"
+  ].join("\n");
+
+  const model = parseNetLogoModel(text, "sample.xml");
+  assert.equal(model.format, "xml");
+  const serialized = serializeNetLogoModel({
+    ...model,
+    info: "# NetLogo 7"
+  });
+
+  assert.match(serialized, /<info># NetLogo 7<\/info>\s*<\/model>/);
+  assert.doesNotMatch(serialized, /<\/model>[\s\S]*<info>/);
+});
+
 test("sample minimal model exposes Code Interface and Info sections", () => {
   const samplePath = path.resolve(__dirname, "..", "samples", "minimal.nlogo");
   const model = parseNetLogoModel(fs.readFileSync(samplePath, "utf8"), samplePath);

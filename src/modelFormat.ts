@@ -28,7 +28,9 @@ export function serializeNetLogoModel(model: NetLogoModel): string {
 }
 
 function isXmlModel(text: string, fileName: string): boolean {
-  return fileName.toLowerCase().endsWith(".nlogox") || /^\s*<\?xml[\s\S]*<netlogo/i.test(text) || /^\s*<netlogo/i.test(text);
+  return fileName.toLowerCase().endsWith(".nlogox")
+    || /^\s*<\?xml[\s\S]*<(?:model|netlogo)\b/i.test(text)
+    || /^\s*<(?:model|netlogo)\b/i.test(text);
 }
 
 function parseClassicModel(text: string): NetLogoModel {
@@ -84,7 +86,7 @@ function writeXmlElement(xml: string, tagName: string, value: string, mode: "raw
     return xml.replace(expression, `$1${serializedValue}$3`);
   }
 
-  const closingRoot = xml.match(/<\/netlogo>\s*$/i);
+  const closingRoot = xml.match(/<\/(?:model|netlogo)>\s*$/i);
   if (closingRoot) {
     const insert = `\n  <${tagName}>${serializedValue}</${tagName}>\n`;
     return xml.slice(0, closingRoot.index) + insert + xml.slice(closingRoot.index);
