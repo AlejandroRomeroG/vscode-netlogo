@@ -613,14 +613,15 @@ test("Info tab renders Markdown and toggles to source editing", () => {
   assert.match(source, /id="infoToggleButton"/);
   assert.match(source, /function setInfoEditing\(editing, selectionOffset, anchorRatio\)/);
   assert.match(source, /function markdownToNodes\(markdown\)/);
-  assert.match(source, /function appendInlineMarkdown\(parent, text, sourceStart\)/);
+  assert.match(source, /NetLogoInfoMarkdown\.createInfoMarkdownRenderer/);
+  assert.match(source, /infoMarkdown\.render\(markdown\)/);
   assert.match(source, /infoPreview\.addEventListener\("click"/);
 });
 
 test("Info preview clicks reveal the matching source offset", () => {
   const source = fs.readFileSync(path.join(root, "src", "netlogoEditor.ts"), "utf8");
 
-  assert.match(source, /function setSourceRange\(element, start, end\)/);
+  assert.match(source, /infoMarkdown\.sourceOffsetForRange\(range\)/);
   assert.match(source, /dataset\.sourceStart/);
   assert.match(source, /function findInfoSourceOffset\(event\)/);
   assert.match(source, /function caretRangeFromEvent\(event\)/);

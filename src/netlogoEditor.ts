@@ -1,5 +1,6 @@
 import * as path from "path";
 import * as vscode from "vscode";
+import { externalInfoUrl, loadInfoLocalImage, resolveInfoLocalFile } from "./infoResources";
 import { promptForNetLogoCommand, rememberNetLogoCommand } from "./commandPrompt";
 import {
   createInterfaceWidget,
@@ -81,6 +82,17 @@ interface WebviewEditorStatusMessage {
   readonly message: string;
 }
 
+interface WebviewInfoLinkMessage {
+  readonly type: "info-link";
+  readonly href: string;
+}
+
+interface WebviewInfoImageMessage {
+  readonly type: "info-image";
+  readonly href: string;
+  readonly requestId: string;
+}
+
 interface WebviewOpenNativeMessage {
   readonly type: "open-native";
 }
@@ -105,6 +117,8 @@ type WebviewMessage =
   | WebviewConfigureMessage
   | WebviewShowOutputMessage
   | WebviewEditorStatusMessage
+  | WebviewInfoLinkMessage
+  | WebviewInfoImageMessage
   | WebviewOpenNativeMessage
   | WebviewSaveDocumentMessage
   | WebviewReadyMessage;
@@ -253,6 +267,36 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
       if (message.type === "editor-status") {
         if (typeof message.message === "string" && message.message.trim()) {
           this.output.appendLine(`[${path.basename(document.fileName)}] ${message.message}`);
+        }
+        return;
+      }
+
+      if (message.type === "info-image") {
+        if (typeof message.requestId !== "string" || typeof message.href !== "string") return;
+        try {
+          const data = await loadInfoLocalImage(document.fileName, message.href);
+          await webviewPanel.webview.postMessage({ type: "info-image-result", requestId: message.requestId, data });
+        } catch (error) {
+          await webviewPanel.webview.postMessage({ type: "info-image-result", requestId: message.requestId,
+            error: error instanceof Error ? error.message : "Image unavailable" });
+        }
+        return;
+      }
+
+      if (message.type === "info-link") {
+        if (typeof message.href !== "string") return;
+        try {
+          const external = externalInfoUrl(message.href);
+          if (external) {
+            if (!await vscode.env.openExternal(vscode.Uri.parse(external))) throw new Error("The link could not be opened.");
+          } else {
+            const file = await resolveInfoLocalFile(document.fileName, message.href);
+            await vscode.commands.executeCommand("vscode.open", vscode.Uri.file(file));
+          }
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : "The link could not be opened.";
+          this.output.appendLine(`[${path.basename(document.fileName)}] Info link: ${detail}`);
+          void vscode.window.showWarningMessage(`Could not open documentation link: ${detail}`);
         }
         return;
       }
@@ -432,13 +476,15 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
   private getHtml(webview: vscode.Webview): string {
     const nonce = getNonce();
     const threeUri = webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, "resources", "vendor", "three", "three.module.min.js"));
+    const markdownUri = webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, "resources", "vendor", "markdown-it", "markdown-it.min.js"));
+    const infoMarkdownUri = webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, "resources", "infoMarkdown.js"));
 
     return /* html */ `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data: ${webview.cspSource}; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}' ${webview.cspSource};">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data: ${webview.cspSource} https: http:; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}' ${webview.cspSource};">
   <title>NetLogo Model Editor</title>
   <style>
     :root {
@@ -873,12 +919,20 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
       overflow: auto;
       height: var(--info-editor-height, calc(100vh - 146px));
       min-height: var(--info-editor-height, 220px);
-      padding: 18px 22px 32px;
+      padding: clamp(18px, 3%, 36px) clamp(16px, 3%, 40px) 48px;
       color: var(--vscode-editor-foreground);
       background: var(--vscode-editor-background);
       font-family: var(--vscode-font-family);
-      line-height: 1.55;
+      font-size: max(14px, var(--vscode-font-size));
+      line-height: 1.6;
       cursor: text;
+    }
+
+    .info-document {
+      width: 100%;
+      max-width: 82ch;
+      min-width: 0;
+      overflow-wrap: anywhere;
     }
 
     .info-preview.hidden,
@@ -907,68 +961,154 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
       grid-row: 2;
     }
 
-    .info-preview h1,
-    .info-preview h2,
-    .info-preview h3 {
-      margin: 1em 0 0.45em;
-      line-height: 1.2;
+    .info-document :is(h1,h2,h3,h4,h5,h6) {
+      margin: 1.8em 0 0.8em;
+      line-height: 1.35;
+      font-weight: 650;
+      scroll-margin-top: 20px;
     }
 
-    .info-preview h1 {
-      padding-bottom: 0.25em;
-      border-bottom: 1px solid var(--vscode-panel-border);
+    .info-document > :first-child { margin-top: 0; }
+
+    .info-document h1,
+    .info-document h2 {
+      padding: 10px 14px;
+      border: 1px solid color-mix(in srgb, var(--vscode-focusBorder, #9082cf) 42%, var(--vscode-panel-border));
+      border-radius: 4px;
+      background: color-mix(in srgb, var(--vscode-focusBorder, #9082cf) 14%, var(--vscode-editor-background));
+      color: var(--vscode-editor-foreground);
+    }
+
+    .info-document h1 {
       font-size: 1.55em;
     }
 
-    .info-preview h2 {
-      font-size: 1.25em;
+    .info-document h2 {
+      font-size: 1.16em;
     }
 
-    .info-preview h3 {
+    .info-document h3 {
       font-size: 1.08em;
     }
 
-    .info-preview p,
-    .info-preview ul,
-    .info-preview ol,
-    .info-preview pre,
-    .info-preview blockquote {
-      margin: 0.7em 0;
+    .info-document :is(h4,h5,h6) { font-size: 1em; }
+    .info-document h5 { font-style: italic; }
+    .info-document h6 { color: var(--vscode-descriptionForeground); }
+
+    .info-document :is(p,ul,ol,pre,blockquote,dl) {
+      margin: 1em 0;
     }
 
-    .info-preview ul,
-    .info-preview ol {
-      padding-left: 1.6em;
+    .info-document :is(ul,ol) {
+      padding-left: 1.8em;
     }
 
-    .info-preview code {
-      padding: 0.1em 0.3em;
+    .info-document li { margin: 0.3em 0; }
+    .info-document li > :is(ul,ol) { margin: 0.35em 0; }
+    .info-document li > p { margin: 0.45em 0; }
+
+    .info-document :is(code,kbd) {
+      padding: 0.12em 0.32em;
+      border: 1px solid var(--vscode-panel-border);
       border-radius: 3px;
       background: var(--vscode-textCodeBlock-background, var(--vscode-editorWidget-background));
       font-family: var(--vscode-editor-font-family, monospace);
+      font-size: 0.92em;
     }
 
-    .info-preview pre {
+    .info-document pre {
       overflow: auto;
-      padding: 10px 12px;
+      max-width: 100%;
+      padding: 14px 16px;
+      border: 1px solid var(--vscode-panel-border);
       border-radius: 4px;
       background: var(--vscode-textCodeBlock-background, var(--vscode-editorWidget-background));
+      line-height: 1.5;
+      white-space: pre;
+      overflow-wrap: normal;
+      tab-size: 4;
     }
 
-    .info-preview pre code {
+    .info-document pre code {
       padding: 0;
+      border: 0;
       background: transparent;
     }
 
-    .info-preview blockquote {
-      padding-left: 12px;
-      border-left: 3px solid var(--vscode-panel-border);
-      color: var(--vscode-descriptionForeground);
+    .info-document blockquote {
+      padding: 2px 16px;
+      border-left: 3px solid var(--vscode-textBlockQuote-border, var(--vscode-focusBorder));
+      background: var(--vscode-textBlockQuote-background, var(--vscode-editorWidget-background));
     }
 
-    .info-preview a {
+    .info-document a[href] {
       color: var(--vscode-textLink-foreground);
-      text-decoration: none;
+      text-decoration: underline;
+      text-underline-offset: 0.18em;
+      cursor: pointer;
+    }
+
+    .info-document a[href]:hover { color: var(--vscode-textLink-activeForeground, var(--vscode-textLink-foreground)); }
+    .info-document :is(a,button,[tabindex]):focus-visible {
+      outline: 2px solid var(--vscode-focusBorder);
+      outline-offset: 3px;
+    }
+
+    .info-document hr {
+      margin: 2em 0;
+      border: 0;
+      border-top: 1px solid var(--vscode-panel-border);
+    }
+
+    .info-document :is(sub,sup) { font-size: 0.75em; line-height: 0; }
+
+    .info-table-scroll {
+      max-width: 100%;
+      overflow-x: auto;
+      margin: 1.2em 0;
+      border: 1px solid var(--vscode-panel-border);
+      border-radius: 4px;
+    }
+
+    .info-document table {
+      min-width: 100%;
+      border-collapse: collapse;
+      font-variant-numeric: tabular-nums;
+      overflow-wrap: normal;
+    }
+
+    .info-document :is(th,td) {
+      padding: 8px 12px;
+      border: 1px solid var(--vscode-panel-border);
+      text-align: left;
+      vertical-align: top;
+      min-width: 7ch;
+    }
+
+    .info-document th {
+      font-weight: 650;
+      background: var(--vscode-editorWidget-background);
+    }
+
+    .info-document caption { padding: 8px 12px; font-weight: 600; text-align: left; }
+    .info-document img { display: block; max-width: 100%; height: auto; }
+    .info-image {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+      max-width: 100%;
+      margin: 0.7em 0;
+      color: var(--vscode-descriptionForeground);
+    }
+    .info-image-label { min-width: 0; }
+    .info-load-image { font: inherit; font-size: 0.85em; cursor: pointer; }
+    .info-empty { color: var(--vscode-descriptionForeground); }
+
+    body.vscode-high-contrast .info-document :is(h1,h2),
+    body.vscode-high-contrast-light .info-document :is(h1,h2) {
+      border-color: var(--vscode-contrastBorder, var(--vscode-focusBorder));
+      background: var(--vscode-editor-background);
     }
 
     .interface-layout {
@@ -1314,6 +1454,17 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
 
     .slider-widget .control-value {
       line-height: 14px;
+    }
+
+    .chooser-widget {
+      min-height: 44px;
+      grid-template-rows: 12px minmax(24px, 1fr);
+      gap: 2px;
+      padding: 2px 6px;
+    }
+
+    .chooser-widget .control-heading {
+      line-height: 12px;
     }
 
     .switch-widget {
@@ -1889,6 +2040,8 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
     window.NetLogoThree = THREE;
     window.dispatchEvent(new Event("netlogo-three-ready"));
   </script>
+  <script nonce="${nonce}" src="${markdownUri}"></script>
+  <script nonce="${nonce}" src="${infoMarkdownUri}"></script>
   <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
     const restoredUiState = vscode.getState?.() ?? {};
@@ -2086,6 +2239,13 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
     const infoPreview = document.getElementById("infoPreview");
     const infoEditorSurface = document.getElementById("infoEditorSurface");
     const infoToggleButton = document.getElementById("infoToggleButton");
+    const infoMarkdown = NetLogoInfoMarkdown.createInfoMarkdownRenderer({
+      document,
+      markdownit,
+      highlightCode: appendHighlightedNetLogo,
+      openLink: href => vscode.postMessage({ type: "info-link", href }),
+      requestImage: (requestId, href) => vscode.postMessage({ type: "info-image", requestId, href })
+    });
     const timers = new Map();
 
     window.addEventListener("resize", updateEditorLayout);
@@ -2228,11 +2388,13 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
     });
 
     infoPreview.addEventListener("click", event => {
+      if (event.target.closest?.("a,button") || window.getSelection()?.isCollapsed === false) return;
       event.preventDefault();
       setInfoEditing(true, findInfoSourceOffset(event), infoClickAnchor(event));
     });
 
     infoPreview.addEventListener("keydown", event => {
+      if (event.target.closest?.("a,button,[role=region]")) return;
       if (event.key === "Enter" || event.key === " ") {
         event.preventDefault();
         setInfoEditing(true);
@@ -2281,6 +2443,10 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
 
     window.addEventListener("message", event => {
       const message = event.data;
+      if (message?.type === "info-image-result") {
+        infoMarkdown.acceptImage(message.requestId, message.data, message.error);
+        return;
+      }
       if (message?.type === "native-opening") {
         setNativeOpening(message.opening);
         return;
@@ -2648,237 +2814,7 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
     }
 
     function markdownToNodes(markdown) {
-      const source = String(markdown ?? "").replace(/\\r\\n/g, "\\n");
-      const lines = splitMarkdownLines(source);
-      const nodes = [];
-      let paragraph = [];
-      let list = null;
-      let codeFence = null;
-
-      function flushParagraph() {
-        if (paragraph.length === 0) {
-          return;
-        }
-        const element = node("p", "", "");
-        setSourceRange(element, paragraph[0].start, paragraph[paragraph.length - 1].end);
-        paragraph.forEach((part, index) => {
-          if (index > 0) {
-            element.append(sourceSpan(" ", Math.max(paragraph[index - 1].end, part.start - 1), "md-source-gap"));
-          }
-          appendInlineMarkdown(element, part.text, part.start);
-        });
-        nodes.push(element);
-        paragraph = [];
-      }
-
-      function flushList() {
-        if (!list) {
-          return;
-        }
-        nodes.push(list.element);
-        list = null;
-      }
-
-      const fenceMarker = String.fromCharCode(96, 96, 96);
-      for (const lineInfo of lines) {
-        const line = lineInfo.text;
-        if (line.startsWith(fenceMarker)) {
-          if (codeFence) {
-            nodes.push(renderCodeFence(codeFence));
-            codeFence = null;
-          } else {
-            flushParagraph();
-            flushList();
-            codeFence = {
-              lines: [],
-              start: lineInfo.next,
-              end: lineInfo.next
-            };
-          }
-          continue;
-        }
-
-        if (codeFence) {
-          codeFence.lines.push(lineInfo);
-          codeFence.end = lineInfo.end;
-          continue;
-        }
-
-        const heading = line.match(/^(#{1,3})(\\s+)(.+)$/);
-        if (heading) {
-          flushParagraph();
-          flushList();
-          const text = heading[3].replace(/\\s+$/, "");
-          const start = lineInfo.start + heading[1].length + heading[2].length;
-          const element = node("h" + heading[1].length, "", "");
-          setSourceRange(element, start, start + text.length);
-          appendInlineMarkdown(element, text, start);
-          nodes.push(element);
-          continue;
-        }
-
-        const unordered = line.match(/^(\\s*[-*]\\s+)(.+)$/);
-        const ordered = line.match(/^(\\s*\\d+[.)]\\s+)(.+)$/);
-        if (unordered || ordered) {
-          flushParagraph();
-          const orderedList = Boolean(ordered);
-          if (!list || list.ordered !== orderedList) {
-            flushList();
-            list = {
-              ordered: orderedList,
-                element: node(orderedList ? "ol" : "ul", "", "")
-            };
-          }
-          const match = unordered ?? ordered;
-          const text = match[2].replace(/\\s+$/, "");
-          const start = lineInfo.start + match[1].length;
-          const item = node("li", "", "");
-          setSourceRange(item, start, start + text.length);
-          appendInlineMarkdown(item, text, start);
-          list.element.append(item);
-          const listStart = Number(list.element.dataset.sourceStart);
-          setSourceRange(
-            list.element,
-            Number.isFinite(listStart) ? Math.min(listStart, start) : start,
-            start + text.length
-          );
-          continue;
-        }
-
-        const quote = line.match(/^(>\\s?)(.*)$/);
-        if (quote) {
-          flushParagraph();
-          flushList();
-          const text = quote[2].replace(/\\s+$/, "");
-          const start = lineInfo.start + quote[1].length;
-          const block = node("blockquote", "", "");
-          setSourceRange(block, start, start + text.length);
-          appendInlineMarkdown(block, text, start);
-          nodes.push(block);
-          continue;
-        }
-
-        if (line.trim() === "") {
-          flushParagraph();
-          flushList();
-          continue;
-        }
-
-        const leading = line.match(/^\\s*/)?.[0].length ?? 0;
-        const text = line.slice(leading).replace(/\\s+$/, "");
-        const start = lineInfo.start + leading;
-        paragraph.push({ text, start, end: start + text.length });
-      }
-
-      if (codeFence) {
-        nodes.push(renderCodeFence(codeFence));
-      }
-      flushParagraph();
-      flushList();
-      return nodes.length > 0 ? nodes : [node("p", "no-selection", "")];
-    }
-
-    function splitMarkdownLines(source) {
-      if (source.length === 0) {
-        return [{ text: "", start: 0, end: 0, next: 0 }];
-      }
-
-      const lines = [];
-      let start = 0;
-      while (start <= source.length) {
-        const newline = source.indexOf("\\n", start);
-        if (newline < 0) {
-          lines.push({ text: source.slice(start), start, end: source.length, next: source.length });
-          break;
-        }
-        lines.push({ text: source.slice(start, newline), start, end: newline, next: newline + 1 });
-        start = newline + 1;
-      }
-      return lines;
-    }
-
-    function renderCodeFence(codeFence) {
-      const text = codeFence.lines.map(line => line.text).join("\\n");
-      const code = node("code", "", text);
-      setSourceRange(code, codeFence.start, codeFence.end);
-      const pre = node("pre", "", code);
-      setSourceRange(pre, codeFence.start, codeFence.end);
-      return pre;
-    }
-
-    function appendInlineMarkdown(parent, text, sourceStart) {
-      const codeMarker = String.fromCharCode(96);
-      let index = 0;
-      while (index < text.length) {
-        if (text.startsWith("**", index)) {
-          const end = text.indexOf("**", index + 2);
-          if (end > index + 2) {
-            const element = node("strong", "", text.slice(index + 2, end));
-            setSourceRange(element, sourceStart + index + 2, sourceStart + end);
-            parent.append(element);
-            index = end + 2;
-            continue;
-          }
-        }
-
-        if (text[index] === "*") {
-          const end = text.indexOf("*", index + 1);
-          if (end > index + 1) {
-            const element = node("em", "", text.slice(index + 1, end));
-            setSourceRange(element, sourceStart + index + 1, sourceStart + end);
-            parent.append(element);
-            index = end + 1;
-            continue;
-          }
-        }
-
-        if (text[index] === codeMarker) {
-          const end = text.indexOf(codeMarker, index + 1);
-          if (end > index + 1) {
-            const element = node("code", "", text.slice(index + 1, end));
-            setSourceRange(element, sourceStart + index + 1, sourceStart + end);
-            parent.append(element);
-            index = end + 1;
-            continue;
-          }
-        }
-
-        if (text[index] === "[") {
-          const labelEnd = text.indexOf("]", index + 1);
-          const urlStart = labelEnd >= 0 ? text.indexOf("(", labelEnd) : -1;
-          const urlEnd = urlStart >= 0 ? text.indexOf(")", urlStart) : -1;
-          if (labelEnd > index + 1 && urlStart === labelEnd + 1 && urlEnd > urlStart + 1) {
-            const href = text.slice(urlStart + 1, urlEnd);
-            const link = node("a", "", text.slice(index + 1, labelEnd));
-            setSourceRange(link, sourceStart + index + 1, sourceStart + labelEnd);
-            if (href.startsWith("http://") || href.startsWith("https://") || href.startsWith("#")) {
-              link.href = href;
-            }
-            parent.append(link);
-            index = urlEnd + 1;
-            continue;
-          }
-        }
-
-        let next = index + 1;
-        while (next < text.length && !text.startsWith("**", next) && !["*", codeMarker, "["].includes(text[next])) {
-          next += 1;
-        }
-        parent.append(sourceSpan(text.slice(index, next), sourceStart + index, ""));
-        index = next;
-      }
-    }
-
-    function sourceSpan(text, sourceStart, className) {
-      const span = node("span", className, text);
-      setSourceRange(span, sourceStart, sourceStart + String(text ?? "").length);
-      return span;
-    }
-
-    function setSourceRange(element, start, end) {
-      element.dataset.sourceStart = String(Math.max(0, start));
-      element.dataset.sourceEnd = String(Math.max(0, end));
-      return element;
+      return [infoMarkdown.render(markdown)];
     }
 
     function findInfoSourceOffset(event) {
@@ -2923,6 +2859,9 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
       if (!range) {
         return null;
       }
+
+      const mapped = infoMarkdown.sourceOffsetForRange(range);
+      if (Number.isFinite(mapped)) return mapped;
 
       const element = closestSourceElement(range.startContainer);
       const start = Number(element?.dataset.sourceStart);
@@ -4541,7 +4480,7 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
       const sizes = {
         slider: { width: 90, height: 35 },
         switch: { width: 80, height: 30 },
-        chooser: { width: 100, height: 34 },
+        chooser: { width: 100, height: 44 },
         monitor: { width: 90, height: 34 },
         plot: { width: 120, height: 80 },
         input: { width: 90, height: 34 },

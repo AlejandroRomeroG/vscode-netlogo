@@ -30,6 +30,7 @@ NetLogo Tools brings a model-aware editing and execution workflow to VS Code whi
 | Capability | What it provides |
 | --- | --- |
 | **Model-aware editor** | A dedicated editor for `.nlogo`, `.nlogo3d`, and `.nlogox` files with familiar **Interface**, **Info**, and **Code** tabs. |
+| **Readable model documentation** | Theme-aware Info with NetLogo-style section bands, nested lists, tables, highlighted code, scientific notation markup, links, and opt-in external images. |
 | **Interface designer** | Separate **Interact** and **Layout** modes, widget selection, keyboard movement, resizing, property editing, and add/delete workflows. |
 | **Headless runtime** | Persistent per-model sessions for `setup`, one-step commands, forever loops, and arbitrary commands with history. |
 | **Plots and monitors** | Multi-pen plots with native colors and modes, a comprehensive plot/pen editor, and NetLogo-style monitor labels and number formatting. |
@@ -83,14 +84,27 @@ code --install-extension ./vscode-netlogo-x.y.z.vsix --force
 
 ### Interface workflow
 
-- **Info** renders model documentation as Markdown and can switch back to its editable source; selecting preview content opens the corresponding source position.
+- **Info** renders model documentation as Markdown and can switch back to its editable source; clicking preview text opens the corresponding source position, while text selection remains available for copying.
 - **Interact** runs Interface buttons and updates sliders, switches, and choosers without enabling layout editing.
 - **Layout** enables selection, drag/resize interactions, keyboard movement, bounds editing, and widget-specific properties.
 - Returning to **Interact** clears the selection, shows **Switch to Layout to edit widget properties.** in Properties, and hides **Delete widget**. **No selection** is reserved for Layout without a selected widget.
 - Supported widgets include views, buttons, sliders, switches, choosers, monitors, plots, inputs, text boxes, and output areas.
 - Slider boxes reserve at least 35px of height so their native thumb and numeric value stay inside the border, including in compact imported interfaces.
+- Choosers reserve separate title/dropdown rows and a 44px minimum height; existing 45px selectors keep their size and position without clipping the title.
 - Switches use one vertically centered checkbox/text row with an associated clickable label, without a duplicate heading.
 - `Cmd+S` on macOS or `Ctrl+S` on Windows/Linux saves back to the real model document.
+
+### Info documentation
+
+- NetLogo-inspired heading bands use the active VS Code theme, with a bounded reading column, generous line spacing, and light/dark/high-contrast styling.
+- Supports headings, nested ordered/unordered lists (including NetLogo's two-space list indentation), emphasis, quotations, reference links, bare web addresses, tables, and subscript/superscript markup for scientific notation.
+- Preserves NetLogo line breaks and literal ASCII diagrams. Unlabelled or `netlogo` code blocks receive NetLogo highlighting; `text` fences remain literal.
+- Wide tables and code blocks scroll within the document without stretching the whole preview. Long links and headings wrap; table numbers stay intact.
+- Web/email links open through VS Code; heading links scroll within Info. Links and image buttons do not enter edit mode.
+- Local PNG, JPEG, GIF, and WebP images can use relative or `file:relative` paths inside the model's folder, up to 8 MiB per image. External images offer **Load image** before contacting their host and retain an alternative-text fallback if unavailable.
+- Rendering leaves the saved Markdown unchanged. The parser is bundled locally; model HTML is rebuilt from an allowlist, without scripts, event handlers, arbitrary styles, or embedded pages.
+
+See [Info rendering and validation](docs/info-rendering.md) for checked model examples, reproducible tests, and compatibility limits.
 
 ### Plots and monitors
 
@@ -245,7 +259,9 @@ Useful scripts:
 | `npm run test:e2e` | Run the VS Code Electron smoke test |
 | `node scripts/previewToolbar.js` | Serve a localhost geometry-check page for tick alignment and the Forever/Stop transition; open the printed URL and select **Check geometry** |
 | `node scripts/previewPlotLayout.js` | Check the actual plot CSS and drawing functions at Traffic widget sizes, narrow/wide/tall sizes, multiple zoom levels, and with many pens |
-| `node scripts/previewSliderLayout.js` | Check slider thumb/value containment and checkbox/text centering at compact and tall sizes, multiple zoom levels, and in Interact/Layout modes |
+| `node scripts/previewSliderLayout.js` | Check slider thumb/value containment, checkbox/text centering, and chooser title/dropdown containment at compact and tall sizes, multiple zoom levels, and in Interact/Layout modes |
+| `node scripts/previewInfo.js` | Preview real model documentation with production styles and check narrow/wide layouts, themes, and zoom levels |
+| `node scripts/checkInfoModels.js` | Read and render every model's Info in the local library, checking parser errors and active HTML without running simulations |
 
 The test suite covers model parsing/serialization, Interface widgets, language services, runtime lifecycle, plots, monitors, generated webview behavior, and native launch/save/error handling. The 3D checks cover binary decoding, native colors and visibility, transparency ordering, exposed patch faces, inspection, and GPU resource reuse/disposal. When a local NetLogo installation is available, integration tests also exercise real sample models through the Java bridge, check complete patch/agent counts, and verify that taking a snapshot does not consume the model's random-number sequence. Set `NETLOGO_HOME` to select a specific installation for integration tests.
 

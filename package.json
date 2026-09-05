@@ -182,7 +182,7 @@
     }
   },
   "scripts": {
-    "compile": "tsc -p ./",
+    "compile": "tsc -p ./ && node scripts/vendorMarkdown.js",
     "package:vsix": "npm run compile && vsce package",
     "package:list": "npm run compile && vsce ls",
     "test": "npm run compile && node --test test/*.test.js",
@@ -195,6 +195,7 @@
     "@types/vscode": "^1.88.0",
     "@vscode/test-electron": "^2.3.10",
     "@vscode/vsce": "^2.15.0",
+    "linkedom": "0.18.12",
     "typescript": "^5.5.2"
   },
   "overrides": {
@@ -202,6 +203,7 @@
   },
   "dependencies": {
     "@types/three": "^0.185.0",
+    "markdown-it": "14.3.1",
     "three": "^0.185.0"
   }
 }
