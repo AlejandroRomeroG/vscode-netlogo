@@ -61,8 +61,28 @@ test("Java command bridge compiles against the expected HeadlessWorkspace API", 
       "}"
     ].join("\n"));
 
+    const apiDeclarations = {
+      Agent: "int alpha();",
+      AgentSet: "int count(); java.lang.Iterable<Agent> agents();",
+      Observer: "double oxcor(); double oycor(); double ozcor();",
+      World3D: "int minPxcor(); int maxPxcor(); int minPycor(); int maxPycor(); int minPzcor(); int maxPzcor(); Observer observer(); AgentSet turtles(); AgentSet links(); AgentSet patches(); int[] patchColors(); Patch3D getPatch(int id);",
+      Turtle3D: "long id(); double xcor(); double ycor(); double zcor(); double heading(); double pitch(); double roll(); double size(); Object color(); boolean hidden(); String shape(); String labelString(); Object labelColor(); double lineThickness();",
+      Link: "Turtle3D end1(); Turtle3D end2(); Object color(); double lineThickness(); boolean isDirectedLink(); boolean hidden(); String shape(); String labelString(); Object labelColor();",
+      Patch3D: "int pxcor(); int pycor(); int pzcor(); Object pcolor();"
+    };
+    const apiPaths = Object.entries(apiDeclarations).map(([name, methods]) => {
+      const file = path.join(apiDir, name + ".java");
+      const agent = ["Turtle3D", "Link", "Patch3D"].includes(name) ? " extends Agent" : "";
+      fs.writeFileSync(file, `package org.nlogo.api; public interface ${name}${agent} { ${methods} }`);
+      return file;
+    });
+    const agentDir = path.join(tempDir, "org", "nlogo", "agent");
+    fs.mkdirSync(agentDir, { recursive: true });
+    const turtlePath = path.join(agentDir, "Turtle.java");
+    fs.writeFileSync(turtlePath, 'package org.nlogo.agent; public abstract class Turtle implements org.nlogo.api.Turtle3D { public String penMode() { return "up"; } }');
+
     const bridgePath = path.resolve(__dirname, "..", "resources", "java", "NetLogoCommandBridge.java");
-    const result = spawnSync("javac", ["-d", classesDir, stubPath, path.join(apiDir, "Drawing3D.java"), path.join(apiDir, "DrawingLine3D.java"), path.join(apiDir, "Color.java"), bridgePath], {
+    const result = spawnSync("javac", ["-d", classesDir, stubPath, path.join(apiDir, "Drawing3D.java"), path.join(apiDir, "DrawingLine3D.java"), path.join(apiDir, "Color.java"), ...apiPaths, turtlePath, bridgePath], {
       encoding: "utf8"
     });
 

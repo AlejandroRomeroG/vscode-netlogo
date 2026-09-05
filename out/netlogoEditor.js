@@ -153,7 +153,13 @@ class NetLogoModelEditorProvider {
                 return;
             }
             if (message.type === "open-native") {
-                await vscode.commands.executeCommand("netlogo.openInNetLogo", document.uri);
+                await webviewPanel.webview.postMessage({ type: "native-opening", opening: true });
+                try {
+                    await vscode.commands.executeCommand("netlogo.openInNetLogo", document.uri);
+                }
+                finally {
+                    await webviewPanel.webview.postMessage({ type: "native-opening", opening: false });
+                }
                 return;
             }
             if (message.type === "save-document") {
@@ -329,6 +335,8 @@ class NetLogoModelEditorProvider {
       justify-content: space-between;
       gap: 12px;
       min-height: 42px;
+      height: 42px;
+      max-height: 42px;
       padding: 6px 12px;
       border-bottom: 1px solid var(--vscode-panel-border);
       background: var(--vscode-sideBar-background);
@@ -365,6 +373,7 @@ class NetLogoModelEditorProvider {
       align-items: center;
       gap: 6px;
       flex: none;
+      height: 28px;
     }
 
     .actions button {
@@ -372,14 +381,22 @@ class NetLogoModelEditorProvider {
       align-items: center;
       justify-content: center;
       height: 28px;
+      min-height: 28px;
+      max-height: 28px;
       padding-top: 0;
       padding-bottom: 0;
+      margin: 0;
+      line-height: 16px;
+      flex: none;
+      appearance: none;
     }
 
     .run-controls {
       display: inline-flex;
       align-items: center;
       gap: 6px;
+      height: 28px;
+      flex: none;
     }
 
     .speed-control {
@@ -432,15 +449,27 @@ class NetLogoModelEditorProvider {
 
     .tick-counter {
       display: inline-flex;
-      align-items: baseline;
+      align-items: center;
+      justify-content: center;
       gap: 5px;
+      height: 28px;
       min-height: 28px;
-      padding: 4px 8px;
+      max-height: 28px;
+      padding: 0 8px;
       border: 1px solid var(--vscode-input-border, var(--vscode-panel-border));
       border-radius: 4px;
       color: var(--vscode-descriptionForeground);
       background: var(--vscode-editorWidget-background);
       font-size: 11px;
+      line-height: 16px;
+      white-space: nowrap;
+    }
+
+    .tick-counter > * {
+      display: inline-flex;
+      align-items: center;
+      height: 16px;
+      line-height: 16px;
     }
 
     .tick-counter strong {
@@ -448,6 +477,7 @@ class NetLogoModelEditorProvider {
       font-family: var(--vscode-editor-font-family, monospace);
       font-size: 12px;
       font-weight: 600;
+      font-variant-numeric: tabular-nums;
     }
 
     button {
@@ -468,6 +498,8 @@ class NetLogoModelEditorProvider {
     #foreverButton {
       width: 68px;
       min-width: 68px;
+      max-width: 68px;
+      align-self: center;
       text-align: center;
     }
 
@@ -1382,6 +1414,8 @@ class NetLogoModelEditorProvider {
       width: 35ch;
       min-width: 35ch;
       min-height: 28px;
+      height: 28px;
+      max-height: 28px;
       padding: 4px 8px;
       overflow-x: auto;
       overflow-y: hidden;
@@ -1951,8 +1985,18 @@ class NetLogoModelEditorProvider {
     });
 
     openNativeButton.addEventListener("click", () => {
+      if (openNativeButton.disabled) return;
+      setNativeOpening(true);
       vscode.postMessage({ type: "open-native" });
     });
+
+    function setNativeOpening(opening) {
+      openNativeButton.disabled = opening;
+      openNativeButton.setAttribute("aria-busy", String(opening));
+      openNativeButton.title = opening
+        ? "Starting NetLogo; native model loading may take a few seconds"
+        : "Open in native NetLogo";
+    }
 
     foreverButton.addEventListener("click", () => {
       if (state.runLoop) {
@@ -2075,6 +2119,10 @@ class NetLogoModelEditorProvider {
 
     window.addEventListener("message", event => {
       const message = event.data;
+      if (message?.type === "native-opening") {
+        setNativeOpening(message.opening);
+        return;
+      }
       if (!message || message.type !== "model") {
         if (message?.type === "runtime-result") {
           applyRuntimeResult(message.result);
@@ -4428,7 +4476,8 @@ class NetLogoModelEditorProvider {
       );
       const target = baseTarget.clone();
 
-      const camera = new THREE.PerspectiveCamera(45, 1, 0.1, span * 12);
+      const camera = new THREE.PerspectiveCamera(45, 1, span / 100, span * 12);
+      renderer.setTransparentSort((a, b) => threeTransparentObjectOrder(a, b, camera));
       const controls = {
         theta: Math.PI / 4,
         phi: Math.PI / 3,
@@ -4456,6 +4505,12 @@ class NetLogoModelEditorProvider {
       const trailState = ensureThreeTrailState(bounds, span);
       const agentLayer = new THREE.Group();
       scene.add(agentLayer);
+      const patchLayer = new THREE.Group();
+      const turtleLayer = new THREE.Group();
+      const transparentLayer = new THREE.Group();
+      scene.add(patchLayer, turtleLayer, transparentLayer);
+      let viewportWidth = 0;
+      let viewportHeight = 0;
       const worldBox = addThreeWorldBox(scene, THREE, bounds);
       rebuildAgentLayer(currentViewState);
 
@@ -4466,6 +4521,11 @@ class NetLogoModelEditorProvider {
       function resize() {
         const width = Math.max(1, host.clientWidth);
         const height = Math.max(1, host.clientHeight);
+        if (width === viewportWidth && height === viewportHeight) {
+          return;
+        }
+        viewportWidth = width;
+        viewportHeight = height;
         renderer.setSize(width, height, false);
         camera.aspect = width / height;
         camera.updateProjectionMatrix();
@@ -4482,10 +4542,17 @@ class NetLogoModelEditorProvider {
           target.z + controls.radius * sinPhi * Math.cos(controls.theta)
         );
         camera.lookAt(target);
+        // Keep the depth range close to the world, including when zooming inside it.
+        const clipping = threeCameraClipping(camera.position, baseTarget, spanX, spanY, spanZ);
+        if (camera.near !== clipping.near || camera.far !== clipping.far) {
+          camera.near = clipping.near;
+          camera.far = clipping.far;
+          camera.updateProjectionMatrix();
+        }
       }
 
       function setCameraPose(pose) {
-        const next = cameraPose(pose, span, baseTarget);
+        const next = cameraPose(pose, span, baseTarget, currentViewState.observer);
         controls.theta = next.theta;
         controls.phi = next.phi;
         controls.radius = next.radius;
@@ -4617,9 +4684,10 @@ class NetLogoModelEditorProvider {
         updateThreePenTrails(trailLayer, THREE, trailState, currentViewState);
         geometryDispose(agentLayer);
         agentLayer.clear();
-        addThreePatches(agentLayer, THREE, currentViewState.patches ?? [], pickables);
-        addThreeTurtles(agentLayer, THREE, currentViewState.turtles, pickables);
-        addThreeLinks(agentLayer, THREE, currentViewState.links, currentViewState.turtles, pickables);
+        addThreePatches(patchLayer, THREE, currentViewState, pickables, true);
+        addThreeTurtles(turtleLayer, THREE, currentViewState.turtles, pickables, true);
+        addThreeLinks(agentLayer, THREE, currentViewState.links, currentViewState.turtles, pickables, true);
+        addThreeTransparency(transparentLayer, THREE, currentViewState, pickables);
         addThreeLabels(agentLayer, THREE, currentViewState.turtles, currentViewState.links);
         label.textContent = threeStatusText(currentViewState);
         draw();
@@ -4638,7 +4706,7 @@ class NetLogoModelEditorProvider {
 
         controls.theta = observerControls.theta;
         controls.phi = observerControls.phi;
-        controls.radius = Number.isFinite(Number(state.threeManualRadius))
+        controls.radius = typeof state.threeManualRadius === "number" && Number.isFinite(state.threeManualRadius)
           ? clampThreeRadius(Number(state.threeManualRadius))
           : observerControls.radius;
         controls.targetX = observerControls.targetX;
@@ -4748,7 +4816,7 @@ class NetLogoModelEditorProvider {
     function threeStatusText(viewState) {
       const turtleCount = displayThreeCoverage(viewState.turtleCount, viewState.turtles.length);
       const linkCount = displayThreeCoverage(viewState.linkCount, viewState.links.length);
-      const patchCount = displayThreeCoverage(viewState.patchCount, viewState.patches?.length ?? 0);
+      const patchCount = displayThreeCoverage(viewState.patchCount, threePatchSource(viewState).length);
       const drawingLineCount = displayThreeCount(viewState.drawingLineCount, viewState.drawingLines?.length ?? 0);
       const parts = [turtleCount + " turtles"];
       if (linkCount !== "0") {
@@ -4782,7 +4850,7 @@ class NetLogoModelEditorProvider {
         : { background: 0x000000, box: 0x8f929a };
     }
 
-    function cameraPose(pose, span, baseTarget) {
+    function cameraPose(pose, span, baseTarget, observer) {
       const radius = state.threeCamera?.radius ?? span * 1.9;
       const targetX = pose === "home" ? baseTarget.x : state.threeCamera?.targetX ?? baseTarget.x;
       const targetY = pose === "home" ? baseTarget.y : state.threeCamera?.targetY ?? baseTarget.y;
@@ -4795,7 +4863,8 @@ class NetLogoModelEditorProvider {
         case "side":
           return { theta: Math.PI / 2, phi: Math.PI / 2, radius, targetX, targetY, targetZ };
         default:
-          return { theta: Math.PI / 4, phi: Math.PI / 3, radius: span * 1.9, targetX: baseTarget.x, targetY: baseTarget.y, targetZ: baseTarget.z };
+          return threeObserverCameraControls(observer, baseTarget, span)
+            ?? { theta: Math.PI / 4, phi: Math.PI / 3, radius: span * 1.9, targetX: baseTarget.x, targetY: baseTarget.y, targetZ: baseTarget.z };
       }
     }
 
@@ -4820,7 +4889,7 @@ class NetLogoModelEditorProvider {
       }
 
       return {
-        theta: Math.atan2(-dx, dz),
+        theta: Math.atan2(dx, dz),
         phi: Math.acos(clampNumber(dy / radius, -1, 1)),
         radius: Math.max(span * 0.35, Math.min(span * 8, radius)),
         targetX: baseTarget.x,
@@ -4852,16 +4921,34 @@ class NetLogoModelEditorProvider {
         && left.maxZ === right.maxZ;
     }
 
+    function threeCameraClipping(position, center, spanX, spanY, spanZ) {
+      const radius = Math.hypot(spanX, spanY, spanZ) / 2;
+      const distance = Math.hypot(position.x - center.x, position.y - center.y, position.z - center.z);
+      const margin = Math.max(1, radius * 0.05);
+      return {
+        near: Math.max(0.01, Math.min(spanX, spanY, spanZ) / 1000, distance - radius - margin),
+        far: Math.max(distance + radius + margin, margin * 2)
+      };
+    }
+
     function geometryDispose(scene) {
+      const geometries = new Set();
+      const materials = new Set();
       scene.traverse(object => {
-        if (object.geometry) {
+        if (object.isInstancedMesh || object.isBatchedMesh) {
+          if (object.isBatchedMesh) geometries.add(object.geometry);
+          object.dispose();
+        }
+        if (object.geometry && !geometries.has(object.geometry)) {
+          geometries.add(object.geometry);
           object.geometry.dispose();
         }
         if (object.material) {
-          if (Array.isArray(object.material)) {
-            object.material.forEach(disposeThreeMaterial);
-          } else {
-            disposeThreeMaterial(object.material);
+          for (const material of Array.isArray(object.material) ? object.material : [object.material]) {
+            if (!materials.has(material)) {
+              materials.add(material);
+              disposeThreeMaterial(material);
+            }
           }
         }
       });
@@ -4891,74 +4978,102 @@ class NetLogoModelEditorProvider {
     }
 
     function addThreeLights(scene, THREE) {
-      scene.add(new THREE.AmbientLight(0xffffff, 0.7));
-      const keyLight = new THREE.DirectionalLight(0xffffff, 0.35);
+      // NetLogo's fixed-function GL lights specify diffuse reflectance directly;
+      // Three.js Lambert materials divide irradiance by PI.
+      const irradianceScale = Math.PI;
+      scene.add(new THREE.AmbientLight(0xffffff, 0.7 * irradianceScale));
+      const keyLight = new THREE.DirectionalLight(0xffffff, 0.35 * irradianceScale);
       keyLight.position.set(-1, 0.4, -0.3);
       scene.add(keyLight);
-      const fillLight = new THREE.DirectionalLight(0xffffff, 0.35);
+      const fillLight = new THREE.DirectionalLight(0xffffff, 0.35 * irradianceScale);
       fillLight.position.set(1, -0.5, 0.6);
       scene.add(fillLight);
     }
 
-    function addThreeTurtles(scene, THREE, turtles, pickables) {
-      if (!turtles.length) {
-        return;
-      }
-
+    function addThreeTurtles(scene, THREE, turtles, pickables, opaqueOnly = false) {
+      const active = new Set();
       const groups = new Map();
       for (const turtle of turtles) {
+        if (turtle.hidden || Number(turtle.size) === 0 || threeOpacity(turtle) === 0
+          || (opaqueOnly && threeOpacity(turtle) < 1)) {
+          continue;
+        }
         const geometryKey = turtleGeometryKey(turtle.shape);
-        const color = threeColorHex(turtle);
         const opacity = threeOpacity(turtle);
-        const key = geometryKey + "|" + color + "|" + opacity;
-        const group = groups.get(key) ?? { geometryKey, color, opacity, items: [] };
+        const key = geometryKey + "|" + opacity;
+        const group = groups.get(key) ?? { key, geometryKey, opacity, items: [] };
         group.items.push(turtle);
         groups.set(key, group);
       }
 
       const baseDirection = new THREE.Vector3(0, 1, 0);
       const matrix = new THREE.Matrix4();
+      const position = new THREE.Vector3();
+      const scale = new THREE.Vector3();
+      const quaternion = new THREE.Quaternion();
+      const rollRotation = new THREE.Quaternion();
+      const color = new THREE.Color();
 
-      for (const group of groups.values()) {
+      for (const group of [...groups.values()].sort((a, b) => a.key.localeCompare(b.key))) {
         if (group.geometryKey === "line") {
-          addThreeLineTurtleGroup(scene, THREE, group, pickables);
+          addThreeLineTurtleGroup(scene, THREE, group, pickables, active);
           continue;
         }
-        const geometry = turtleGeometryForKey(THREE, group.geometryKey);
-        const material = new THREE.MeshLambertMaterial({
-          color: group.color,
-          side: THREE.DoubleSide,
-          transparent: group.opacity < 1,
-          opacity: group.opacity,
-          depthWrite: group.opacity >= 1
-        });
-        forEachThreeChunk(group.items, THREE_INSTANCE_CHUNK_SIZE, chunk => {
-          const mesh = new THREE.InstancedMesh(geometry, material, chunk.length);
+        for (let start = 0; start < group.items.length; start += THREE_INSTANCE_CHUNK_SIZE) {
+          const chunk = group.items.slice(start, start + THREE_INSTANCE_CHUNK_SIZE);
+          const key = group.key + "|" + start;
+          active.add(key);
+          const mesh = threeInstanceBatch(scene, THREE, key, chunk.length, group.opacity,
+            () => turtleGeometryForKey(THREE, group.geometryKey), false);
           mesh.userData = { kind: "turtle", items: chunk };
 
           chunk.forEach((turtle, index) => {
             const rawSize = Number(turtle.size);
             const size = Number.isFinite(rawSize) && rawSize > 0 ? Math.max(0.01, rawSize) : 1;
-            const position = netLogoVector(THREE, turtle.x, turtle.y, turtle.z);
+            position.set(turtle.x, turtle.z, turtle.y);
             const direction = turtleDirection(THREE, turtle.heading, turtle.pitch);
-            const quaternion = group.geometryKey === "sphere"
-              ? new THREE.Quaternion()
-              : new THREE.Quaternion().setFromUnitVectors(baseDirection, direction);
-            const scale = new THREE.Vector3(size, size, size);
+            quaternion.setFromUnitVectors(baseDirection, direction);
+            quaternion.multiply(rollRotation.setFromAxisAngle(baseDirection, -(Number(turtle.roll) || 0) * Math.PI / 180));
+            scale.set(size, size, size);
             matrix.compose(position, quaternion, scale);
             mesh.setMatrixAt(index, matrix);
+            mesh.setColorAt(index, color.setHex(threeColorHex(turtle)));
           });
-          mesh.instanceMatrix.needsUpdate = true;
-          scene.add(mesh);
+          finishThreeInstanceBatch(mesh);
           pickables.push(mesh);
-        });
+        }
       }
+      pruneThreeBatches(scene, active);
     }
 
-    function addThreeLineTurtleGroup(scene, THREE, group, pickables) {
-      const positions = new Float32Array(group.items.length * 6);
+    function addThreeLineTurtleGroup(scene, THREE, group, pickables, active) {
+      const key = group.key;
+      active.add(key);
+      const batches = threeBatches(scene);
+      let lines = batches.get(key);
+      const count = group.items.length * 2;
+      if (!lines || lines.geometry.getAttribute("position").count < count) {
+        if (lines) {
+          geometryDispose(lines);
+          scene.remove(lines);
+        }
+        const capacity = Math.pow(2, Math.ceil(Math.log2(Math.max(64, count))));
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute("position", new THREE.BufferAttribute(new Float32Array(capacity * 3), 3).setUsage(THREE.DynamicDrawUsage));
+        geometry.setAttribute("color", new THREE.BufferAttribute(new Float32Array(capacity * 3), 3).setUsage(THREE.DynamicDrawUsage));
+        const material = new THREE.LineBasicMaterial({
+          vertexColors: true, transparent: group.opacity < 1, opacity: group.opacity, depthWrite: group.opacity >= 1
+        });
+        lines = new THREE.LineSegments(geometry, material);
+        lines.renderOrder = 2;
+        batches.set(key, lines);
+        scene.add(lines);
+      }
+      const positions = lines.geometry.getAttribute("position").array;
+      const colors = lines.geometry.getAttribute("color").array;
       const position = new THREE.Vector3();
       const endpoint = new THREE.Vector3();
+      const color = new THREE.Color();
       let cursor = 0;
 
       for (const turtle of group.items) {
@@ -4966,6 +5081,9 @@ class NetLogoModelEditorProvider {
         const halfLength = (Number.isFinite(rawSize) && rawSize > 0 ? Math.max(0.01, rawSize) : 1) * 0.5;
         position.copy(netLogoVector(THREE, turtle.x, turtle.y, turtle.z));
         const direction = turtleDirection(THREE, turtle.heading, turtle.pitch).multiplyScalar(halfLength);
+        color.setHex(threeColorHex(turtle));
+        color.toArray(colors, cursor);
+        color.toArray(colors, cursor + 3);
         endpoint.copy(position).sub(direction);
         positions[cursor++] = endpoint.x;
         positions[cursor++] = endpoint.y;
@@ -4976,17 +5094,15 @@ class NetLogoModelEditorProvider {
         positions[cursor++] = endpoint.z;
       }
 
-      const geometry = new THREE.BufferGeometry();
-      geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-      const material = new THREE.LineBasicMaterial({
-        color: group.color,
-        transparent: group.opacity < 1,
-        opacity: group.opacity,
-        depthWrite: group.opacity >= 1
-      });
-      const lines = new THREE.LineSegments(geometry, material);
+      lines.geometry.setDrawRange(0, count);
+      for (const name of ["position", "color"]) {
+        const attribute = lines.geometry.getAttribute(name);
+        attribute.clearUpdateRanges();
+        attribute.addUpdateRange(0, cursor);
+        attribute.needsUpdate = true;
+      }
+      lines.geometry.computeBoundingSphere();
       lines.userData = { kind: "turtle", items: group.items, lineItems: true };
-      scene.add(lines);
       pickables.push(lines);
     }
 
@@ -5020,43 +5136,394 @@ class NetLogoModelEditorProvider {
       }
     }
 
-    function addThreePatches(scene, THREE, patches, pickables) {
-      if (!patches.length) {
+    function threeBatches(scene) {
+      return scene.userData.threeBatches ?? (scene.userData.threeBatches = new Map());
+    }
+
+    function threeInstanceBatch(scene, THREE, key, count, opacity, createGeometry, patch) {
+      const batches = threeBatches(scene);
+      let mesh = batches.get(key);
+      if (!mesh || mesh.instanceMatrix.count < count) {
+        const capacity = Math.min(THREE_INSTANCE_CHUNK_SIZE, Math.pow(2, Math.ceil(Math.log2(Math.max(64, count)))));
+        const geometry = mesh?.geometry ?? createGeometry();
+        const material = mesh?.material ?? new THREE.MeshLambertMaterial({
+          color: 0xffffff,
+          side: THREE.FrontSide,
+          transparent: opacity < 1,
+          opacity,
+          depthWrite: opacity >= 1,
+          // Give coincident trails/agents precedence without moving patch coordinates.
+          polygonOffset: patch,
+          polygonOffsetFactor: patch ? 1 : 0,
+          polygonOffsetUnits: patch ? 1 : 0
+        });
+        if (mesh) {
+          mesh.dispose();
+          scene.remove(mesh);
+        }
+        mesh = new THREE.InstancedMesh(geometry, material, capacity);
+        mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+        mesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(capacity * 3), 3).setUsage(THREE.DynamicDrawUsage);
+        mesh.renderOrder = patch ? 0 : 2;
+        batches.set(key, mesh);
+        scene.add(mesh);
+      }
+      mesh.count = count;
+      return mesh;
+    }
+
+    function finishThreeInstanceBatch(mesh, bounds) {
+      for (const attribute of [mesh.instanceMatrix, mesh.instanceColor]) {
+        attribute.clearUpdateRanges();
+        attribute.addUpdateRange(0, mesh.count * attribute.itemSize);
+        attribute.needsUpdate = true;
+      }
+      // Three.js does not automatically refresh these after instance transforms change.
+      if (bounds) {
+        mesh.boundingBox = bounds;
+      } else {
+        mesh.computeBoundingBox();
+      }
+      if (!mesh.geometry.boundingSphere) mesh.geometry.computeBoundingSphere();
+      mesh.boundingSphere = mesh.boundingBox.getBoundingSphere(mesh.boundingSphere ?? mesh.geometry.boundingSphere.clone());
+    }
+
+    function pruneThreeBatches(scene, active) {
+      for (const [key, object] of threeBatches(scene)) {
+        if (!active.has(key)) {
+          geometryDispose(object);
+          scene.remove(object);
+          threeBatches(scene).delete(key);
+        }
+      }
+    }
+
+    function threePatchSource(viewState) {
+      const bytes = threeDrawingBytes(viewState.patchData);
+      if (!bytes) {
+        const patches = viewState.patches ?? [];
+        return {
+          length: patches.length,
+          x: index => patches[index].x, y: index => patches[index].y, z: index => patches[index].z,
+          alpha: index => Math.round(threeOpacity(patches[index]) * 255),
+          color: index => threeColorHex(patches[index]), item: index => patches[index]
+        };
+      }
+      if (bytes.byteLength % 24 !== 0 || bytes.byteLength / 24 !== viewState.patchCount) {
+        throw new Error("Invalid packed NetLogo patches.");
+      }
+      const data = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      return {
+        length: bytes.byteLength / 24,
+        x: index => data.getInt32(index * 24, false),
+        y: index => data.getInt32(index * 24 + 4, false),
+        z: index => data.getInt32(index * 24 + 8, false),
+        alpha: index => data.getUint8(index * 24 + 20),
+        color: index => data.getUint32(index * 24 + 20, false) & 0xffffff,
+        item: index => {
+          const offset = index * 24;
+          const color = data.getFloat64(offset + 12, false);
+          return {
+            x: data.getInt32(offset, false), y: data.getInt32(offset + 4, false), z: data.getInt32(offset + 8, false),
+            color: Number.isFinite(color) ? color : undefined, alpha: data.getUint8(offset + 20),
+            colorRgb: { red: data.getUint8(offset + 21), green: data.getUint8(offset + 22), blue: data.getUint8(offset + 23) }
+          };
+        }
+      };
+    }
+
+    function sameThreeBytes(left, right) {
+      const a = threeDrawingBytes(left);
+      const b = threeDrawingBytes(right);
+      if (!a || !b || a.byteLength !== b.byteLength) {
+        return false;
+      }
+      for (let index = 0; index < a.length; index += 1) {
+        if (a[index] !== b[index]) {
+          return false;
+        }
+      }
+      return true;
+    }
+
+    function threePatchGroups(patches, bounds) {
+      const width = bounds.maxX - bounds.minX + 1;
+      const height = bounds.maxY - bounds.minY + 1;
+      const plane = width * height;
+      const volume = plane * (bounds.maxZ - bounds.minZ + 1);
+      const idAt = (x, y, z) => x - bounds.minX + (y - bounds.minY) * width + (z - bounds.minZ) * plane;
+      // A dense occupancy map is faster for voxel worlds; sparse worlds retain
+      // a set so a huge, mostly empty world cannot trigger a huge allocation.
+      const dense = volume <= 16 * 1024 * 1024 && volume <= Math.max(65536, patches.length * 32)
+        ? new Uint8Array(volume) : null;
+      const opaque = dense ? null : new Set();
+      const isOpaque = dense ? id => dense[id] === 1 : id => opaque.has(id);
+      for (let index = 0; index < patches.length; index += 1) {
+        if (patches.alpha(index) === 255) {
+          const id = idAt(patches.x(index), patches.y(index), patches.z(index));
+          if (dense) dense[id] = 1;
+          else opaque.add(id);
+        }
+      }
+      const groups = new Map();
+      for (let index = 0; index < patches.length; index += 1) {
+        const alpha = patches.alpha(index);
+        if (alpha === 0) {
+          continue;
+        }
+        const x = patches.x(index), y = patches.y(index), z = patches.z(index);
+        const id = idAt(x, y, z);
+        // BoxGeometry face order in the viewer's x/z/y coordinate system.
+        const mask = alpha < 255 ? 63
+          : (x === bounds.maxX || !isOpaque(id + 1) ? 1 : 0)
+            | (x === bounds.minX || !isOpaque(id - 1) ? 2 : 0)
+            | (z === bounds.maxZ || !isOpaque(id + plane) ? 4 : 0)
+            | (z === bounds.minZ || !isOpaque(id - plane) ? 8 : 0)
+            | (y === bounds.maxY || !isOpaque(id + width) ? 16 : 0)
+            | (y === bounds.minY || !isOpaque(id - width) ? 32 : 0);
+        if (mask === 0) {
+          continue;
+        }
+        const key = mask + "|" + alpha;
+        const group = groups.get(key) ?? { key, mask, opacity: alpha / 255, items: [] };
+        group.items.push(index);
+        groups.set(key, group);
+      }
+      return groups;
+    }
+
+    function threePatchGeometry(THREE, mask) {
+      const geometry = new THREE.BoxGeometry(1, 1, 1);
+      const indices = [];
+      geometry.groups.forEach((group, face) => {
+        if (mask & (1 << face)) {
+          for (let index = group.start; index < group.start + group.count; index += 1) {
+            indices.push(geometry.index.getX(index));
+          }
+        }
+      });
+      geometry.clearGroups();
+      geometry.setIndex(indices);
+      return geometry;
+    }
+
+    function addThreePatches(scene, THREE, viewState, pickables, opaqueOnly = false) {
+      if (viewState.patchData && scene.userData.opaqueOnly === opaqueOnly && sameThreeBytes(scene.userData.patchData, viewState.patchData)) {
+        scene.userData.patchData = viewState.patchData;
+        pickables.push(...threeBatches(scene).values());
+        return;
+      }
+      const patches = threePatchSource(viewState);
+      const groups = threePatchGroups(patches, viewState.bounds);
+      const active = new Set();
+      const matrix = new THREE.Matrix4();
+      const color = new THREE.Color();
+      let instances = 0;
+      let faces = 0;
+      for (const group of groups.values()) {
+        if (opaqueOnly && group.opacity < 1) continue;
+        for (let start = 0; start < group.items.length; start += THREE_INSTANCE_CHUNK_SIZE) {
+          const chunk = group.items.slice(start, start + THREE_INSTANCE_CHUNK_SIZE);
+          const key = group.key + "|" + start;
+          active.add(key);
+          const mesh = threeInstanceBatch(scene, THREE, key, chunk.length, group.opacity,
+            () => threePatchGeometry(THREE, group.mask), true);
+          const bounds = new THREE.Box3();
+          const position = new THREE.Vector3();
+          chunk.forEach((patchIndex, index) => {
+            position.set(patches.x(patchIndex), patches.z(patchIndex), patches.y(patchIndex));
+            bounds.expandByPoint(position);
+            matrix.makeTranslation(position.x, position.y, position.z);
+            mesh.setMatrixAt(index, matrix);
+            mesh.setColorAt(index, color.setHex(patches.color(patchIndex)));
+          });
+          finishThreeInstanceBatch(mesh, bounds.expandByScalar(0.5));
+          mesh.userData = { kind: "patch", itemAt: index => patches.item(chunk[index]) };
+          pickables.push(mesh);
+          instances += chunk.length;
+          faces += chunk.length * mesh.geometry.index.count / 6;
+        }
+      }
+      pruneThreeBatches(scene, active);
+      scene.userData.patchData = viewState.patchData;
+      scene.userData.opaqueOnly = opaqueOnly;
+      scene.userData.patchStats = { patches: patches.length, instances, faces };
+    }
+
+    function threeDistanceSquared(center, camera) {
+      return (center.x - camera.position.x) ** 2 + (center.y - camera.position.y) ** 2
+        + (center.z - camera.position.z) ** 2;
+    }
+
+    function threeTransparentObjectOrder(a, b, camera) {
+      const center = object => object.userData.transparentCenter ?? {
+        x: object.matrixWorld.elements[12], y: object.matrixWorld.elements[13], z: object.matrixWorld.elements[14]
+      };
+      return a.groupOrder - b.groupOrder
+        || threeDistanceSquared(center(b.object), camera) - threeDistanceSquared(center(a.object), camera)
+        || a.id - b.id;
+    }
+
+    function threeTransparentEntries(layer, viewState) {
+      const entries = [];
+      for (const turtle of viewState.turtles) {
+        const alpha = threeOpacity(turtle);
+        if (!turtle.hidden && Number(turtle.size) !== 0 && alpha > 0 && alpha < 1) {
+          entries.push({ kind: "turtle", key: "turtle|" + turtle.who, geometry: turtleGeometryKey(turtle.shape),
+            item: turtle, center: { x: turtle.x, y: turtle.z, z: turtle.y } });
+        }
+      }
+      if (!viewState.patchData || !sameThreeBytes(layer.userData.patchData, viewState.patchData)) {
+        const patches = threePatchSource(viewState);
+        const transparentPatches = [];
+        for (let index = 0; index < patches.length; index += 1) {
+          const alpha = patches.alpha(index);
+          if (alpha > 0 && alpha < 255) {
+            const patch = patches.item(index);
+            transparentPatches.push({ kind: "patch", key: "patch|" + patch.x + "|" + patch.y + "|" + patch.z,
+              geometry: "patch", item: patch, center: { x: patch.x, y: patch.z, z: patch.y } });
+          }
+        }
+        layer.userData.patchEntries = transparentPatches;
+        layer.userData.patchData = viewState.patchData;
+      }
+      for (const patch of layer.userData.patchEntries ?? []) entries.push(patch);
+      if (viewState.links.length) {
+        const turtles = new Map(viewState.turtles.map(turtle => [turtle.who, turtle]));
+        for (const [index, link] of viewState.links.entries()) {
+          const alpha = threeOpacity(link);
+          const a = turtles.get(link.end1), b = turtles.get(link.end2);
+          if (!link.hidden && alpha > 0 && alpha < 1 && a && b) {
+            entries.push({ kind: "link", key: "link|" + index, geometry: "line", item: link,
+              center: { x: (a.x + b.x) / 2, y: (a.z + b.z) / 2, z: (a.y + b.y) / 2 } });
+          }
+        }
+      }
+      return entries;
+    }
+
+    function addThreeTransparency(layer, THREE, viewState, pickables, forceIndividual = false) {
+      const entries = threeTransparentEntries(layer, viewState);
+      // Meshes share one RGBA batch, sorted globally rather than per color/shape.
+      // Lines and labels need to interleave with meshes: keep the native per-agent
+      // draw order in that case instead of incorrectly drawing one entire batch first.
+      const hasLabel = agent => !agent.hidden && String(agent.label ?? "").length > 0;
+      const individual = forceIndividual || entries.some(entry => entry.geometry === "line")
+        || viewState.turtles.some(hasLabel) || viewState.links.some(hasLabel);
+      const mode = entries.length === 0 ? "empty" : individual ? "individual" : "batched";
+      if (layer.userData.mode !== mode) {
+        geometryDispose(layer);
+        layer.clear();
+        layer.userData.mesh = null;
+        layer.userData.objects = new Map();
+        layer.userData.mode = mode;
+      }
+      layer.userData.entries = entries;
+      if (!entries.length) return;
+
+      if (individual) {
+        const objects = layer.userData.objects;
+        const active = new Set();
+        for (const entry of entries) {
+          active.add(entry.key);
+          let group = objects.get(entry.key);
+          if (!group) {
+            group = new THREE.Group();
+            objects.set(entry.key, group);
+            layer.add(group);
+          }
+          if (entry.kind === "turtle") {
+            addThreeTurtles(group, THREE, [entry.item], pickables);
+          } else if (entry.kind === "patch") {
+            // An individual translucent cube retains all faces; do not allocate
+            // a whole-world occupancy map for every cube in this fallback.
+            const patch = entry.item;
+            addThreePatches(group, THREE, { bounds: { minX: patch.x, maxX: patch.x,
+              minY: patch.y, maxY: patch.y, minZ: patch.z, maxZ: patch.z }, patches: [patch] }, pickables);
+          } else {
+            geometryDispose(group);
+            group.clear();
+            addThreeLinks(group, THREE, [entry.item], viewState.turtles, pickables);
+          }
+          group.traverse(object => {
+            if (object.material) {
+              object.userData.transparentCenter = entry.center;
+              object.material.depthWrite = true;
+              object.material.side = THREE.FrontSide;
+              object.material.polygonOffset = false;
+              object.renderOrder = 0;
+            }
+          });
+        }
+        for (const [key, object] of objects) {
+          if (!active.has(key)) {
+            geometryDispose(object);
+            layer.remove(object);
+            objects.delete(key);
+          }
+        }
         return;
       }
 
-      const groups = new Map();
-      for (const patch of patches) {
-        const color = threeColorHex(patch);
-        const opacity = threeOpacity(patch);
-        const key = color + "|" + opacity;
-        const group = groups.get(key) ?? { color, opacity, items: [] };
-        group.items.push(patch);
-        groups.set(key, group);
-      }
-
-      const matrix = new THREE.Matrix4();
-
-      for (const group of groups.values()) {
-        const geometry = new THREE.BoxGeometry(1, 1, 1);
-        const material = new THREE.MeshLambertMaterial({
-          color: group.color,
-          transparent: group.opacity < 1,
-          opacity: group.opacity,
-          depthWrite: group.opacity >= 1
+      let mesh = layer.userData.mesh;
+      const capacity = Math.pow(2, Math.ceil(Math.log2(Math.max(64, entries.length))));
+      if (!mesh) {
+        const geometries = new Map(["patch", "box", "sphere", "cone", "cylinder"].map(key => [key,
+          key === "patch" ? new THREE.BoxGeometry(1, 1, 1) : turtleGeometryForKey(THREE, key)]));
+        const vertices = [...geometries.values()].reduce((sum, geometry) => sum + geometry.getAttribute("position").count, 0);
+        const indices = [...geometries.values()].reduce((sum, geometry) => sum + geometry.index.count, 0);
+        const material = new THREE.MeshLambertMaterial({ color: 0xffffff, transparent: true,
+          side: THREE.FrontSide, depthWrite: true });
+        mesh = new THREE.BatchedMesh(capacity, vertices, indices, material);
+        mesh.userData.geometryIds = new Map();
+        for (const [key, geometry] of geometries) {
+          mesh.userData.geometryIds.set(key, mesh.addGeometry(geometry));
+          geometry.dispose();
+        }
+        mesh.userData.capacity = capacity;
+        mesh.userData.instanceCount = 0;
+        mesh.userData.itemAt = index => mesh.userData.entries[index]?.item;
+        mesh.userData.kindAt = index => mesh.userData.entries[index]?.kind;
+        mesh.setCustomSort((list, camera) => {
+          for (const item of list) item.z = threeDistanceSquared(mesh.userData.entries[item.index].center, camera);
+          list.sort((a, b) => b.z - a.z || a.index - b.index);
         });
-        forEachThreeChunk(group.items, THREE_INSTANCE_CHUNK_SIZE, chunk => {
-          const mesh = new THREE.InstancedMesh(geometry, material, chunk.length);
-          chunk.forEach((patch, index) => {
-            matrix.makeTranslation(Number(patch.x) || 0, Number(patch.z) || 0, Number(patch.y) || 0);
-            mesh.setMatrixAt(index, matrix);
-          });
-          mesh.instanceMatrix.needsUpdate = true;
-          mesh.userData = { kind: "patch", items: chunk };
-          scene.add(mesh);
-          pickables.push(mesh);
-        });
+        mesh.frustumCulled = false; // BatchedMesh performs per-instance culling.
+        layer.userData.mesh = mesh;
+        layer.add(mesh);
+      } else if (capacity > mesh.userData.capacity) {
+        mesh.setInstanceCount(capacity);
+        mesh.userData.capacity = capacity;
       }
+      mesh.userData.entries = entries;
+      const matrix = new THREE.Matrix4(), position = new THREE.Vector3(), scale = new THREE.Vector3();
+      const baseDirection = new THREE.Vector3(0, 1, 0), quaternion = new THREE.Quaternion(), roll = new THREE.Quaternion();
+      const color = new THREE.Color(), rgba = new THREE.Vector4();
+      entries.forEach((entry, index) => {
+        const geometry = mesh.userData.geometryIds.get(entry.geometry);
+        if (index >= mesh.userData.instanceCount) {
+          mesh.addInstance(geometry);
+          mesh.userData.instanceCount += 1;
+        } else {
+          mesh.setGeometryIdAt(index, geometry);
+          mesh.setVisibleAt(index, true);
+        }
+        const item = entry.item;
+        if (entry.kind === "patch") {
+          matrix.makeTranslation(entry.center.x, entry.center.y, entry.center.z);
+        } else {
+          const size = Math.max(0.01, Number(item.size) || 1);
+          position.set(entry.center.x, entry.center.y, entry.center.z);
+          quaternion.setFromUnitVectors(baseDirection, turtleDirection(THREE, item.heading, item.pitch));
+          quaternion.multiply(roll.setFromAxisAngle(baseDirection, -(Number(item.roll) || 0) * Math.PI / 180));
+          matrix.compose(position, quaternion, scale.setScalar(size));
+        }
+        mesh.setMatrixAt(index, matrix);
+        color.setHex(threeColorHex(item));
+        mesh.setColorAt(index, rgba.set(color.r, color.g, color.b, threeOpacity(item)));
+      });
+      for (let index = entries.length; index < mesh.userData.instanceCount; index += 1) mesh.setVisibleAt(index, false);
+      pickables.push(mesh);
     }
 
     function forEachThreeChunk(items, size, visit) {
@@ -5065,7 +5532,7 @@ class NetLogoModelEditorProvider {
       }
     }
 
-    function addThreeLinks(scene, THREE, links, turtles, pickables) {
+    function addThreeLinks(scene, THREE, links, turtles, pickables, opaqueOnly = false) {
       if (!links.length) {
         return;
       }
@@ -5076,6 +5543,9 @@ class NetLogoModelEditorProvider {
       }
 
       for (const link of links) {
+        if (link.hidden || threeOpacity(link) === 0 || (opaqueOnly && threeOpacity(link) < 1)) {
+          continue;
+        }
         const end1 = turtleByWho.get(link.end1);
         const end2 = turtleByWho.get(link.end2);
         if (!end1 || !end2) {
@@ -5133,7 +5603,7 @@ class NetLogoModelEditorProvider {
 
     function addThreeLabels(scene, THREE, turtles, links) {
       for (const turtle of turtles) {
-        if (String(turtle.label ?? "").length === 0) {
+        if (turtle.hidden || String(turtle.label ?? "").length === 0) {
           continue;
         }
         const position = netLogoVector(THREE, turtle.x, turtle.y, turtle.z);
@@ -5156,7 +5626,7 @@ class NetLogoModelEditorProvider {
         turtleByWho.set(turtle.who, turtle);
       }
       for (const link of links) {
-        if (String(link.label ?? "").length === 0) {
+        if (link.hidden || String(link.label ?? "").length === 0) {
           continue;
         }
         const end1 = turtleByWho.get(link.end1);
@@ -5276,6 +5746,10 @@ class NetLogoModelEditorProvider {
     }
 
     function renderThreePackedTrailSegments(layer, THREE, data) {
+      if (sameThreeBytes(layer.userData.drawingData, data)) {
+        return true;
+      }
+      layer.userData.drawingData = undefined;
       geometryDispose(layer);
       layer.clear();
 
@@ -5359,6 +5833,7 @@ class NetLogoModelEditorProvider {
         lines.renderOrder = batchIndex;
         layer.add(lines);
       });
+      layer.userData.drawingData = data;
       return true;
     }
 
@@ -5442,6 +5917,7 @@ class NetLogoModelEditorProvider {
       trailState.previous = new Map();
       trailState.segments = [];
       trailState.source = "turtle";
+      layer.userData.drawingData = undefined;
       geometryDispose(layer);
       layer.clear();
     }
@@ -5562,7 +6038,7 @@ class NetLogoModelEditorProvider {
 
     function describeThreeHit(hit) {
       const object = hit.object;
-      const kind = object.userData?.kind;
+      const kind = object.userData?.kindAt?.(hit.batchId) ?? object.userData?.kind;
       if (kind === "turtle") {
         const turtle = threeHitItem(hit);
         return turtle
@@ -5589,8 +6065,8 @@ class NetLogoModelEditorProvider {
       }
       const rawIndex = userData?.lineItems
         ? Math.floor((Number(hit.index) || 0) / 2)
-        : (hit.instanceId ?? 0);
-      return userData?.items?.[rawIndex];
+        : (hit.batchId ?? hit.instanceId ?? 0);
+      return userData?.itemAt ? userData.itemAt(rawIndex) : userData?.items?.[rawIndex];
     }
 
     function renderThreeInspector(container, hit) {
@@ -5619,7 +6095,7 @@ class NetLogoModelEditorProvider {
 
     function threeInspectionDetails(hit) {
       const object = hit.object;
-      const kind = object.userData?.kind;
+      const kind = object.userData?.kindAt?.(hit.batchId) ?? object.userData?.kind;
       if (kind === "turtle") {
         const turtle = threeHitItem(hit);
         if (!turtle) {

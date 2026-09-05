@@ -14,6 +14,7 @@ import {
 import { getConfiguredJvmArgs, resolveNetLogoClassPath } from "./netlogoInstallation";
 import { parseNetLogoModel } from "./modelFormat";
 import { parsePlotCsv, type ParsedPlotCsv } from "./plotCsv";
+import { parseView3DBinary } from "./view3D";
 
 export interface NetLogoRunResult {
   readonly command: string;
@@ -46,6 +47,7 @@ export interface View3DState {
   readonly patchCount?: number;
   readonly drawingLineCount?: number;
   readonly drawingData?: ArrayBuffer;
+  readonly patchData?: ArrayBuffer;
   readonly turtles: readonly Turtle3DValue[];
   readonly links: readonly Link3DValue[];
   readonly patches: readonly Patch3DValue[];
@@ -83,6 +85,8 @@ export interface Turtle3DValue {
   readonly alpha?: number;
   readonly heading: number;
   readonly pitch: number;
+  readonly roll?: number;
+  readonly hidden?: boolean;
   readonly size: number;
   readonly penMode?: string;
   readonly penSize?: number;
@@ -101,6 +105,7 @@ export interface Link3DValue {
   readonly alpha?: number;
   readonly thickness: number;
   readonly directed?: boolean;
+  readonly hidden?: boolean;
   readonly shape?: string;
   readonly label?: string;
   readonly labelColor?: number;
@@ -477,63 +482,23 @@ export class NetLogoRunner implements vscode.Disposable {
     }
   }
 
-  private async tryReportView3D(session: NetLogoSession, verboseOutput: boolean): Promise<View3DState | undefined> {
+  private async tryReportView3D(session: NetLogoSession, verboseOutput: boolean): Promise<View3DState> {
+    const exportDir = path.join(this.context.globalStorageUri.fsPath, "view-3d-exports");
+    fs.mkdirSync(exportDir, { recursive: true });
+    const exportPath = path.join(exportDir, `view-3d-${Date.now()}-${Math.random().toString(16).slice(2)}.bin`);
     try {
-      const boundsText = await session.report("list min-pxcor max-pxcor min-pycor max-pycor min-pzcor max-pzcor", { showError: false });
-      const bounds = parseView3DBounds(boundsText);
-      if (!bounds) {
-        return undefined;
-      }
-
-      const turtleCount = await this.tryReport3DCount(session, "count turtles", "turtles", verboseOutput);
-      const linkCount = await this.tryReport3DCount(session, "count links", "links", verboseOutput);
-      const patchCount = await this.tryReport3DCount(session, "count patches with [pcolor != black]", "patches", verboseOutput);
-      const turtlesText = await this.tryReport3DList(
-        session,
-        "[ (word who \"|\" xcor \"|\" ycor \"|\" zcor \"|\" color \"|\" (item 0 (extract-rgb color)) \"|\" (item 1 (extract-rgb color)) \"|\" (item 2 (extract-rgb color)) \"|\" heading \"|\" pitch \"|\" size \"|\" shape \"|\" label \"|\" label-color \"|\" (item 0 (extract-rgb label-color)) \"|\" (item 1 (extract-rgb label-color)) \"|\" (item 2 (extract-rgb label-color)) \"|\" pen-mode \"|\" pen-size) ] of turtles",
-        "turtles",
-        verboseOutput
-      );
-      const linksText = await this.tryReport3DList(
-        session,
-        "[ (word [who] of end1 \"|\" [who] of end2 \"|\" color \"|\" (item 0 (extract-rgb color)) \"|\" (item 1 (extract-rgb color)) \"|\" (item 2 (extract-rgb color)) \"|\" thickness \"|\" (is-directed-link? self) \"|\" shape \"|\" label \"|\" label-color \"|\" (item 0 (extract-rgb label-color)) \"|\" (item 1 (extract-rgb label-color)) \"|\" (item 2 (extract-rgb label-color))) ] of links",
-        "links",
-        verboseOutput
-      );
-      const patchesText = await this.tryReport3DList(
-        session,
-        "[ (word pxcor \"|\" pycor \"|\" pzcor \"|\" pcolor \"|\" (item 0 (extract-rgb pcolor)) \"|\" (item 1 (extract-rgb pcolor)) \"|\" (item 2 (extract-rgb pcolor))) ] of sublist (sort patches with [pcolor != black]) 0 (min (list 5000 count patches with [pcolor != black]))",
-        "patches",
-        verboseOutput
-      );
-      const observer = await this.tryReportView3DObserver(session, verboseOutput);
+      await session.exportView3D(exportPath);
+      const snapshot = parseView3DBinary(await fs.promises.readFile(exportPath));
       const drawingLinesReport = await this.tryReportDrawing3D(session, verboseOutput);
-
       return {
-        bounds,
-        observer,
-        turtleCount,
-        linkCount,
-        patchCount,
+        ...snapshot,
         drawingLineCount: drawingLinesReport.totalCount,
-        drawingData: drawingLinesReport.data,
-        turtles: parseNetLogoDelimitedList(turtlesText).map(parseTurtle3DValue).filter((value): value is Turtle3DValue => value !== undefined),
-        links: parseNetLogoDelimitedList(linksText).map(parseLink3DValue).filter((value): value is Link3DValue => value !== undefined),
-        patches: parseNetLogoDelimitedList(patchesText).map(parsePatch3DValue).filter((value): value is Patch3DValue => value !== undefined),
-        drawingLines: []
+        drawingData: drawingLinesReport.data
       };
     } catch (error) {
-      this.logVerbose(verboseOutput, `3D view state failed: ${formatNetLogoErrorMessage(error)}`);
-      return undefined;
-    }
-  }
-
-  private async tryReportView3DObserver(session: NetLogoSession, verboseOutput: boolean): Promise<Observer3DValue | undefined> {
-    try {
-      return parseView3DObserver(await session.report("list __oxcor __oycor __ozcor", { showError: false }));
-    } catch (error) {
-      this.logVerbose(verboseOutput, `3D observer report failed: ${formatNetLogoErrorMessage(error)}`);
-      return undefined;
+      throw new Error(`3D view export failed: ${formatNetLogoErrorMessage(error)}`);
+    } finally {
+      deleteTemporaryExport(exportPath);
     }
   }
 
@@ -558,45 +523,6 @@ export class NetLogoRunner implements vscode.Disposable {
       } catch {
         // Drawing exports are temporary; a failed cleanup should not hide the real result.
       }
-    }
-  }
-
-  private async tryReport3DList(
-    session: NetLogoSession,
-    reporter: string,
-    label: string,
-    verboseOutput: boolean
-  ): Promise<string> {
-    const exportDir = path.join(this.context.globalStorageUri.fsPath, "report-3d-exports");
-    fs.mkdirSync(exportDir, { recursive: true });
-    const exportPath = path.join(exportDir, `${label}-3d-${Date.now()}-${Math.random().toString(16).slice(2)}.txt`);
-
-    try {
-      await session.exportReport(reporter, exportPath);
-      return readTextFile(exportPath) ?? "[]";
-    } catch (error) {
-      this.logVerbose(verboseOutput, `3D ${label} report failed: ${formatNetLogoErrorMessage(error)}`);
-      return "[]";
-    } finally {
-      try {
-        fs.unlinkSync(exportPath);
-      } catch {
-        // 3D report exports are temporary; a failed cleanup should not hide the real result.
-      }
-    }
-  }
-
-  private async tryReport3DCount(
-    session: NetLogoSession,
-    reporter: string,
-    label: string,
-    verboseOutput: boolean
-  ): Promise<number | undefined> {
-    try {
-      return parseCount(await session.report(reporter, { showError: false }));
-    } catch (error) {
-      this.logVerbose(verboseOutput, `3D ${label} count failed: ${formatNetLogoErrorMessage(error)}`);
-      return undefined;
     }
   }
 
@@ -754,6 +680,12 @@ class NetLogoSession implements vscode.Disposable {
 
   public async exportDrawing3DBinary(filePath: string): Promise<void> {
     const next = this.commandChain.catch(() => undefined).then(() => this.exportDrawing3DBinaryNow(filePath));
+    this.commandChain = next.then(() => undefined);
+    return next;
+  }
+
+  public async exportView3D(filePath: string): Promise<void> {
+    const next = this.commandChain.catch(() => undefined).then(() => this.exportView3DNow(filePath));
     this.commandChain = next.then(() => undefined);
     return next;
   }
@@ -920,6 +852,22 @@ class NetLogoSession implements vscode.Disposable {
         }
       });
     }, Math.max(this.commandTimeoutMs, 5 * 60_000));
+  }
+
+  private async exportView3DNow(filePath: string): Promise<void> {
+    if (this.isDisposed) {
+      throw new Error("NetLogo session is already closed.");
+    }
+    await this.ready;
+    this.logVerbose("netlogo:export-view-3d>");
+    return this.createPending<void>("3D view export", () => {
+      const encodedPath = Buffer.from(filePath, "utf8").toString("base64");
+      this.child.stdin.write(`EXPORT_VIEW_3D ${encodedPath}\n`, "utf8", error => {
+        if (error) {
+          this.failPending(error);
+        }
+      });
+    });
   }
 
   private handleStdout(text: string): void {

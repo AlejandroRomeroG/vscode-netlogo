@@ -80,23 +80,10 @@ test("extension registers native NetLogo open command", () => {
   assert.match(source, /function openInNativeNetLogo\(resource\?: vscode\.Uri\)/);
   assert.match(source, /function nativeNetLogoAppForResource\(resource: vscode\.Uri\)/);
   assert.match(source, /findNativeNetLogoApp\(installation\.home, \{ threeD: resource\.fsPath\.toLowerCase\(\)\.endsWith\("\.nlogo3d"\) \}\)/);
-  assert.match(source, /function macAppBundleIdentifier\(appPath: string\)/);
-  assert.match(source, /function macAppBundleExecutable\(appPath: string\)/);
-  assert.match(source, /function macAppInfoValue\(appPath: string, key: string\)/);
-  assert.match(source, /CFBundleIdentifier/);
-  assert.match(source, /CFBundleExecutable/);
-  assert.match(source, /await isMacAppRunning\(appPath\)/);
-  assert.match(source, /await launchMacAppWithArgs\(appPath, \["--open", filePath\]\)/);
-  assert.match(source, /await runMacOpen\(\["-a", appPath, filePath\]\)/);
-  assert.match(source, /await runMacOpen\(\["-b", bundleId, filePath\]\)/);
-  assert.match(source, /function isMacAppRunning\(appPath: string\): Promise<boolean>/);
-  assert.match(source, /spawn\("pgrep", \["-x", executable\]/);
-  assert.match(source, /function launchMacAppWithArgs\(appPath: string, args: readonly string\[\]\): Promise<void>/);
-  assert.match(source, /return runMacOpen\(\["-a", appPath, "--args", \.\.\.args\]\)/);
-  assert.doesNotMatch(source, /function spawnDetached\(command: string, args: readonly string\[\], cwd\?: string\): Promise<void>/);
-  assert.doesNotMatch(source, /spawn\(executablePath, \[filePath\]/);
-  assert.doesNotMatch(source, /await runMacOpen\(\["-n", "-a", appPath, filePath\]\)/);
-  assert.match(source, /spawn\("open", args/);
+  assert.match(source, /new NativeNetLogoLauncher\(\)/);
+  assert.match(source, /nativeNetLogoLauncher\.openMacModel\(appPath, uri\.fsPath\)/);
+  assert.match(source, /document\.isDirty && !await document\.save\(\)/);
+  assert.match(source, /showErrorMessage\(`Could not open NetLogo:/);
   assert.match(source, /vscode\.env\.openExternal\(uri\)/);
 });
 

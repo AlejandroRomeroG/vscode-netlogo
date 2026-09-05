@@ -10,6 +10,7 @@ import java.io.PrintStream;
 import java.awt.Color;
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
+import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -27,6 +28,7 @@ public final class NetLogoCommandBridge {
   private static final int DRAWING_3D_BINARY_MAGIC = 0x4e4c4433; // NLD3
   private static final int DRAWING_3D_BINARY_VERSION = 2;
   private static final int DRAWING_3D_BINARY_RECORD_SIZE = 32;
+  private static ByteBuffer view3DPatches = ByteBuffer.allocate(0);
 
   private NetLogoCommandBridge() {
   }
@@ -181,6 +183,10 @@ public final class NetLogoCommandBridge {
           System.out.println(OK);
         } else if ("DRAWING_3D".equals(line)) {
           System.out.println(DRAWING_3D + encodePayload(exportDrawing3D(workspace)));
+        } else if (line.startsWith("EXPORT_VIEW_3D ")) {
+          String path = decodePayload(line.substring("EXPORT_VIEW_3D ".length()));
+          exportView3D(workspace, path);
+          System.out.println(OK);
         } else if (line.startsWith("EXPORT_DRAWING_3D_BINARY ")) {
           String path = decodePayload(line.substring("EXPORT_DRAWING_3D_BINARY ".length()));
           exportDrawing3DBinary(workspace, path);
@@ -274,6 +280,95 @@ public final class NetLogoCommandBridge {
       Object value = workspace.report(reporter);
       writer.append(String.valueOf(value));
     }
+  }
+
+  private static void exportView3D(HeadlessWorkspace workspace, String path) throws Exception {
+    org.nlogo.api.World3D world = (org.nlogo.api.World3D) workspace.world();
+    int[] nativeColors = world.patchColors();
+    int requiredBytes = Math.multiplyExact(nativeColors.length, 24);
+    if (view3DPatches.capacity() < requiredBytes || view3DPatches.capacity() > Math.max(65536L, requiredBytes * 4L)) {
+      view3DPatches = ByteBuffer.allocate(requiredBytes);
+    }
+    view3DPatches.clear();
+    int patchCount = 0;
+    for (int id = 0; id < nativeColors.length; id += 1) {
+      org.nlogo.api.Patch3D patch = (org.nlogo.api.Patch3D) world.getPatch(id);
+      Object value = patch.pcolor();
+      double numeric = value instanceof Number ? ((Number) value).doubleValue() : Double.NaN;
+      // Numeric black is invisible in 3D, but RGB black is not. NetLogo caches
+      // numeric RGB values; RGB lists still need Color.getColor to preserve alpha.
+      int argb = value instanceof Number ? (numeric == 0.0 ? 0 : nativeColors[id])
+        : org.nlogo.api.Color.getColor(value).getRGB();
+      if ((argb >>> 24) == 0) {
+        continue;
+      }
+      view3DPatches.putInt(patch.pxcor()).putInt(patch.pycor()).putInt(patch.pzcor());
+      view3DPatches.putDouble(numeric).putInt(argb);
+      patchCount += 1;
+    }
+
+    // NLV3 v1, big endian: bounds (6 int32), observer (3 float64), counts (3 int32),
+    // variable-length turtle/link records, then patches (xyz int32, color float64, ARGB).
+    // Native iteration is stable and does not shuffle agentsets or consume the model RNG.
+    try (DataOutputStream output = new DataOutputStream(new BufferedOutputStream(Files.newOutputStream(Paths.get(path))))) {
+      output.writeInt(0x4e4c5633);
+      output.writeInt(1);
+      output.writeInt(world.minPxcor());
+      output.writeInt(world.maxPxcor());
+      output.writeInt(world.minPycor());
+      output.writeInt(world.maxPycor());
+      output.writeInt(world.minPzcor());
+      output.writeInt(world.maxPzcor());
+      output.writeDouble(world.observer().oxcor());
+      output.writeDouble(world.observer().oycor());
+      output.writeDouble(world.observer().ozcor());
+      output.writeInt(world.turtles().count());
+      output.writeInt(world.links().count());
+      output.writeInt(patchCount);
+
+      for (org.nlogo.api.Agent agent : world.turtles().agents()) {
+        org.nlogo.api.Turtle3D turtle = (org.nlogo.api.Turtle3D) agent;
+        output.writeDouble(turtle.id());
+        output.writeDouble(turtle.xcor());
+        output.writeDouble(turtle.ycor());
+        output.writeDouble(turtle.zcor());
+        output.writeDouble(turtle.heading());
+        output.writeDouble(turtle.pitch());
+        output.writeDouble(turtle.roll());
+        output.writeDouble(turtle.size());
+        writeView3DColor(output, turtle.color(), turtle.alpha());
+        output.writeBoolean(turtle.hidden());
+        writeView3DString(output, turtle.shape());
+        writeView3DString(output, turtle.labelString());
+        writeView3DColor(output, turtle.labelColor(), org.nlogo.api.Color.getColor(turtle.labelColor()).getAlpha());
+        writeView3DString(output, ((org.nlogo.agent.Turtle) turtle).penMode());
+        output.writeDouble(turtle.lineThickness());
+      }
+      for (org.nlogo.api.Agent agent : world.links().agents()) {
+        org.nlogo.api.Link link = (org.nlogo.api.Link) agent;
+        output.writeDouble(link.end1().id());
+        output.writeDouble(link.end2().id());
+        writeView3DColor(output, link.color(), link.alpha());
+        output.writeDouble(link.lineThickness());
+        output.writeBoolean(link.isDirectedLink());
+        output.writeBoolean(link.hidden());
+        writeView3DString(output, link.shape());
+        writeView3DString(output, link.labelString());
+        writeView3DColor(output, link.labelColor(), org.nlogo.api.Color.getColor(link.labelColor()).getAlpha());
+      }
+      output.write(view3DPatches.array(), 0, view3DPatches.position());
+    }
+  }
+
+  private static void writeView3DString(DataOutputStream output, String value) throws Exception {
+    byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
+    output.writeInt(bytes.length);
+    output.write(bytes);
+  }
+
+  private static void writeView3DColor(DataOutputStream output, Object value, int alpha) throws Exception {
+    output.writeDouble(value instanceof Number ? ((Number) value).doubleValue() : Double.NaN);
+    output.writeInt((org.nlogo.api.Color.getColor(value).getRGB() & 0x00ffffff) | (alpha << 24));
   }
 
   private static String exportDrawing3D(HeadlessWorkspace workspace) throws Throwable {

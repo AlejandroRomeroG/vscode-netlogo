@@ -5,6 +5,7 @@ node_modules/**
 src/**
 test/**
 test-e2e/**
+scripts/**
 .vscode-test/**
 tsconfig.json
 package-lock.json

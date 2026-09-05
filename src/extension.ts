@@ -1,7 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
 import * as vscode from "vscode";
-import { spawn } from "child_process";
 import { clearNetLogoCommandHistory, promptForNetLogoCommand, rememberNetLogoCommand } from "./commandPrompt";
 import { findNetLogoDefinition, findNetLogoReferences, isValidNetLogoProcedureName } from "./modelDefinitions";
 import { analyzeNetLogoCode } from "./modelDiagnostics";
@@ -11,6 +10,7 @@ import { createNetLogoCompletionProvider } from "./netlogoCompletions";
 import { NetLogoModelEditorProvider } from "./netlogoEditor";
 import { detectNetLogoInstallations, findNativeNetLogoApp, installationFromHome, resolveNetLogoClassPath } from "./netlogoInstallation";
 import { NetLogoRunner } from "./runner";
+import { NativeNetLogoLauncher } from "./nativeNetLogo";
 
 export function activate(context: vscode.ExtensionContext): void {
   const output = vscode.window.createOutputChannel("NetLogo");
@@ -66,7 +66,14 @@ export function activate(context: vscode.ExtensionContext): void {
       }
     }),
     vscode.commands.registerCommand("netlogo.openInNetLogo", async (resource?: vscode.Uri) => {
-      await openInNativeNetLogo(resource);
+      try {
+        return await openInNativeNetLogo(resource);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        output.appendLine(`Native NetLogo launch failed: ${message}`);
+        void vscode.window.showErrorMessage(`Could not open NetLogo: ${message}`);
+        return false;
+      }
     }),
     vscode.commands.registerCommand("netlogo.showOutput", () => {
       output.show(true);
@@ -690,24 +697,36 @@ function stripInlineComment(line: string): string {
   return line;
 }
 
-async function openInNativeNetLogo(resource?: vscode.Uri): Promise<void> {
+const nativeNetLogoLauncher = new NativeNetLogoLauncher();
+
+async function openInNativeNetLogo(resource?: vscode.Uri): Promise<boolean> {
   const uri = await resolveModelUri(resource);
   if (!uri) {
-    return;
+    return false;
   }
 
   if (uri.scheme !== "file") {
-    await vscode.env.openExternal(uri);
-    return;
+    return vscode.env.openExternal(uri);
+  }
+
+  const document = await vscode.workspace.openTextDocument(uri);
+  if (document.isDirty && !await document.save()) {
+    return false;
   }
 
   const appPath = process.platform === "darwin" ? nativeNetLogoAppForResource(uri) : undefined;
   if (!appPath) {
-    await vscode.env.openExternal(uri);
-    return;
+    if (!await vscode.env.openExternal(uri)) {
+      throw new Error("No native application could open this model. Check your NetLogo installation.");
+    }
+    return true;
   }
 
-  await openFileWithMacApp(appPath, uri.fsPath);
+  await vscode.window.withProgress({
+    location: vscode.ProgressLocation.Notification,
+    title: `Starting NetLogo: ${path.basename(uri.fsPath)} (native startup may take a few seconds)`
+  }, () => nativeNetLogoLauncher.openMacModel(appPath, uri.fsPath));
+  return true;
 }
 
 function nativeNetLogoAppForResource(resource: vscode.Uri): string | undefined {
@@ -718,93 +737,6 @@ function nativeNetLogoAppForResource(resource: vscode.Uri): string | undefined {
     autoDetect: config.get<boolean>("autoDetect", true)
   });
   return installation ? findNativeNetLogoApp(installation.home, { threeD: resource.fsPath.toLowerCase().endsWith(".nlogo3d") }) : undefined;
-}
-
-async function openFileWithMacApp(appPath: string, filePath: string): Promise<void> {
-  try {
-    const appWasRunning = await isMacAppRunning(appPath);
-    if (!appWasRunning) {
-      await launchMacAppWithArgs(appPath, ["--open", filePath]);
-      return;
-    }
-
-    try {
-      await runMacOpen(["-a", appPath, filePath]);
-      return;
-    } catch {
-      // Some Launch Services registrations prefer bundle IDs over app paths.
-    }
-
-    const bundleId = macAppBundleIdentifier(appPath);
-    if (bundleId) {
-      await runMacOpen(["-b", bundleId, filePath]);
-      return;
-    }
-
-    await vscode.env.openExternal(vscode.Uri.file(filePath));
-  } catch {
-    await vscode.env.openExternal(vscode.Uri.file(filePath));
-  }
-}
-
-function macAppBundleIdentifier(appPath: string): string | undefined {
-  return macAppInfoValue(appPath, "CFBundleIdentifier");
-}
-
-function macAppBundleExecutable(appPath: string): string | undefined {
-  return macAppInfoValue(appPath, "CFBundleExecutable");
-}
-
-function macAppInfoValue(appPath: string, key: string): string | undefined {
-  if (!appPath.toLowerCase().endsWith(".app")) {
-    return undefined;
-  }
-
-  try {
-    const infoPath = path.join(appPath, "Contents", "Info.plist");
-    const info = fs.readFileSync(infoPath, "utf8");
-    const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    return info.match(new RegExp(`<key>${escapedKey}<\\/key>\\s*<string>([^<]+)<\\/string>`))?.[1]?.trim() || undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function isMacAppRunning(appPath: string): Promise<boolean> {
-  const executable = macAppBundleExecutable(appPath);
-  if (!executable) {
-    return Promise.resolve(false);
-  }
-
-  return new Promise<boolean>(resolve => {
-    const child = spawn("pgrep", ["-x", executable], {
-      stdio: "ignore"
-    });
-    child.once("error", () => resolve(false));
-    child.once("close", code => resolve(code === 0));
-  });
-}
-
-function launchMacAppWithArgs(appPath: string, args: readonly string[]): Promise<void> {
-  return runMacOpen(["-a", appPath, "--args", ...args]);
-}
-
-function runMacOpen(args: readonly string[]): Promise<void> {
-  return new Promise<void>((resolve, reject) => {
-    const child = spawn("open", args, {
-      stdio: "ignore",
-      detached: true
-    });
-    child.once("error", reject);
-    child.once("close", code => {
-      if (code === 0) {
-        resolve();
-      } else {
-        reject(new Error(`open exited with code ${code ?? "unknown"}`));
-      }
-    });
-    child.unref();
-  });
 }
 
 async function configureNetLogo(): Promise<void> {

@@ -3,6 +3,7 @@
   <h1>NetLogo Tools for VS Code</h1>
   <p><strong>Open, edit, run, and visualize NetLogo models without leaving Visual Studio Code.</strong></p>
   <p>
+    <img alt="Version 0.1.38" src="https://img.shields.io/badge/version-0.1.38-5A3E85?style=flat-square">
     <img alt="Status: Alpha" src="https://img.shields.io/badge/status-alpha-F59E0B?style=flat-square">
     <img alt="VS Code 1.88 or newer" src="https://img.shields.io/badge/VS_Code-%E2%89%A51.88-007ACC?style=flat-square&amp;logo=visualstudiocode&amp;logoColor=white">
     <img alt="Tested with NetLogo 6.4" src="https://img.shields.io/badge/NetLogo-6.4_tested-5A3E85?style=flat-square">
@@ -11,6 +12,7 @@
   <p>
     <a href="#highlights">Highlights</a> ·
     <a href="#quick-start">Quick start</a> ·
+    <a href="#3d-viewer">3D viewer</a> ·
     <a href="#commands">Commands</a> ·
     <a href="#configuration">Configuration</a> ·
     <a href="#development">Development</a>
@@ -30,9 +32,9 @@ NetLogo Tools brings a model-aware editing and execution workflow to VS Code whi
 | **Interface designer** | Separate **Interact** and **Layout** modes, widget selection, keyboard movement, resizing, property editing, and add/delete workflows. |
 | **Headless runtime** | Persistent per-model sessions for `setup`, one-step commands, forever loops, and arbitrary commands with history. |
 | **Plots and monitors** | Multi-pen plots with native colors and modes, a comprehensive plot/pen editor, and NetLogo-style monitor labels and number formatting. |
-| **2D and 3D visualization** | Native 2D view exports plus an interactive local Three.js renderer for 3D agents, links, labels, patches, and drawing trails. |
+| **2D and 3D visualization** | Native 2D view exports plus an interactive Three.js viewer with uncapped visible patch export, native RGBA colors, sorted transparency, and reusable rendering buffers. |
 | **Language intelligence** | Syntax highlighting, completions, diagnostics, quick fixes, symbols, hover, definitions, references, highlights, and rename support. |
-| **Desktop integration** | NetLogo installation detection, runtime configuration, an output channel, and **Open in NetLogo** actions. |
+| **Desktop integration** | Installation detection, runtime configuration, diagnostics, and **Open in NetLogo** with save-before-launch and separate native instances on macOS. |
 
 ## Supported model formats
 
@@ -74,14 +76,16 @@ code --install-extension ./vscode-netlogo-x.y.z.vsix --force
 3. In **Interface**, run **Setup**, **Go once**, or **Forever**. The same toolbar can open the command prompt or native NetLogo.
 4. Switch to **Layout** to select widgets, edit properties, move or resize them, and add or delete supported widget types.
 5. Use **Info** for rendered Markdown documentation and **Code** for NetLogo source editing and language tools.
+6. Use **Open in NetLogo** to open the saved model in NetLogo Desktop. The native application runs independently; this does not transfer the current simulation state.
 
 ## Editing and visualization
 
 ### Interface workflow
 
 - **Info** renders model documentation as Markdown and can switch back to its editable source; selecting preview content opens the corresponding source position.
-- **Interact** runs Interface buttons and updates sliders, switches, and choosers without exposing layout controls.
+- **Interact** runs Interface buttons and updates sliders, switches, and choosers without enabling layout editing.
 - **Layout** enables selection, drag/resize interactions, keyboard movement, bounds editing, and widget-specific properties.
+- Returning to **Interact** clears the selection, resets Properties to **No selection**, and hides **Delete widget**.
 - Supported widgets include views, buttons, sliders, switches, choosers, monitors, plots, inputs, text boxes, and output areas.
 - `Cmd+S` on macOS or `Ctrl+S` on Windows/Linux saves back to the real model document.
 
@@ -89,19 +93,41 @@ code --install-extension ./vscode-netlogo-x.y.z.vsix --force
 
 - Reads complete native `export-plot` data, including multiple pens, unequal series lengths, color changes, pen-up points, runtime ranges, and legends.
 - Renders NetLogo **Line**, **Bar**, and **Point** pen modes with native palette colors and intervals.
+- Draws plot series in front of the axes, so a line at zero remains visible.
 - Edits plot title, axes, ranges, auto-scaling, legend visibility, plot setup/update commands, and every pen's name, color, mode, interval, legend status, and setup/update commands.
 - Offers all 154 default NetLogo 6.4 color swatches.
 - Displays monitor titles correctly and formats numeric output with precision-aware rounding, grouping separators, trimmed decimal zeroes, and scientific notation when appropriate.
 
-### Runtime and views
+### Runtime and playback
 
 - Keeps a persistent headless workspace per model and runtime configuration.
 - Saves and synchronizes stored Interface control values before execution.
 - Refreshes ticks, monitors, plots, and views after each command.
-- Uses NetLogo's tick-based speed scale and configured view frame rate as the target for forever loops while keeping `Stop` responsive.
+- Maps the speed slider to NetLogo's tick-based speed scale, including its central normal-speed range and nonlinear slow/fast response. Normal speed uses the model's configured view frame rate, with 30 FPS as the fallback.
+- Uses bounded command batches at high speeds to keep **Stop** responsive. The displayed FPS is a target, not a measurement; actual pacing is not guaranteed to match NetLogo Desktop frame for frame.
+- Keeps the tick counter vertically centered and the **Forever / Stop** button at fixed dimensions and alignment; only its label and color change when running.
 - Displays 2D models from NetLogo's own exported PNG view.
-- Reconstructs 3D models locally with orbit, zoom, pan, standard camera views, reset, fullscreen, light/dark backgrounds, and basic agent inspection.
-- Handles compact 3D drawing trails for models with large agent and trail counts.
+
+### 3D viewer
+
+The simulation runs in NetLogo's native headless workspace. The extension reads that state and renders a separate Three.js view; it does not reimplement the model's rules in JavaScript.
+
+- **Navigation and inspection:** orbit, zoom, pan, top/front/side views, fullscreen, light/dark backgrounds, and basic agent inspection. Reset camera restores the native observer position.
+- **Complete visible patch export:** binary snapshots replace repeated text reporters and the former 5,000-patch sampling cap. Patch-only worlds such as **Percolation 3D** render without requiring turtles.
+- **Native agent data:** transfers turtles, links, patches, labels, RGBA colors, hidden flags, and turtle heading/pitch/roll. Numeric black and RGB/RGBA patch colors retain their different native visibility behavior.
+- **Large scenes and drawing trails:** compact binary trail data, reusable GPU instance buffers, packed patch records, and reuse of unchanged patch/trail geometry reduce repeated allocation and rebuilding. Internal faces between opaque patches are omitted.
+- **Transparency:** batches translucent meshes with per-agent RGBA colors and sorts them farthest-first by camera distance, including while orbiting. Mixed transparent lines and labels use individual-object ordering so they can interleave with meshes.
+- **Depth stability:** world-aware camera clipping and a small opaque-patch depth bias reduce coplanar flicker without moving agents or changing model coordinates.
+
+See [3D rendering and validation](docs/3d-rendering.md) for the binary format, native reference implementations, reproducible checks, and measured performance comparisons. These are component benchmarks, not a promise of a particular end-to-end FPS. Custom shapes, lighting, and intersecting transparent surfaces can still differ from NetLogo Desktop.
+
+### Native desktop integration
+
+- **Open in NetLogo** saves pending model edits before launching; cancelling or failing the save prevents opening an outdated copy.
+- On macOS, the selected 2D or 3D application starts a **separate native instance** with the model supplied at startup. This preserves other open models and avoids the 3D canvas freeze observed when replacing a model through a macOS file-open event.
+- Concurrent launch requests for the same model are combined while the launch command is in progress. The editor button shows a busy state, and launch failures are reported instead of silently retried through another application.
+
+Native and VS Code simulations are independent. First launch still includes JVM and model initialization; a successful launch notification means the request was accepted, not that loading is complete. Close unused native instances to release their memory.
 
 ### NetLogo language tools
 
@@ -175,6 +201,13 @@ Increase `netlogo.commandTimeoutMs` for long-running models. Enable `netlogo.ver
 
 </details>
 
+<details>
+<summary><strong>NetLogo Desktop is slow to open or opens another window</strong></summary>
+
+Allow the native JVM and model to finish loading before clicking again. A later click can deliberately open another copy; duplicate suppression applies only while the launch command is in progress. Separate instances on macOS are intentional and preserve already-open models. If launch fails, check the reported error and **NetLogo: Show Output**, then verify the installation through **NetLogo: Configure NetLogo**.
+
+</details>
+
 ## Development
 
 ```bash
@@ -193,13 +226,16 @@ Useful scripts:
 | `npm run watch` | Compile TypeScript continuously |
 | `npm run package:list` | Inspect the files included in the VSIX |
 | `npm run test:e2e` | Run the VS Code Electron smoke test |
+| `node scripts/previewToolbar.js` | Serve a localhost geometry-check page for tick alignment and the Forever/Stop transition; open the printed URL and select **Check geometry** |
 
-The test suite covers model parsing/serialization, Interface widgets, language services, runtime lifecycle, plots, monitors, 2D/3D data, and generated webview behavior. When a local NetLogo installation is available, it also exercises real sample models through the Java bridge. Set `NETLOGO_HOME` to select a specific installation for integration tests.
+The test suite covers model parsing/serialization, Interface widgets, language services, runtime lifecycle, plots, monitors, generated webview behavior, and native launch/save/error handling. The 3D checks cover binary decoding, native colors and visibility, transparency ordering, exposed patch faces, inspection, and GPU resource reuse/disposal. When a local NetLogo installation is available, integration tests also exercise real sample models through the Java bridge, check complete patch/agent counts, and verify that taking a snapshot does not consume the model's random-number sequence. Set `NETLOGO_HOME` to select a specific installation for integration tests.
+
+For reproducible 3D export benchmarks and a local visual check, see [3D rendering and validation](docs/3d-rendering.md).
 
 ## Compatibility and known limitations
 
 - NetLogo Desktop remains the reference implementation; headless execution and VS Code rendering may differ from the native GUI.
-- The 3D viewer is experimental. Shapes, camera behavior, lighting, and some agent details are approximated; non-black patch rendering is currently capped at 5,000 patches.
+- The 3D viewer is experimental. Custom shapes, some camera behavior, lighting, and overlapping transparent surfaces can differ from the native renderer. Transparency uses native-style agent-level sorting, not order-independent rendering; translucent drawing trails have separate ordering limitations.
 - The 2D view is an exported image refreshed after execution, not a continuously shared native canvas.
 - The **Add widget** menu does not create a new View; existing views can still be inspected, moved, resized, and edited.
 - Output widgets are displayed but do not yet receive live `print`/`show` output.
@@ -208,7 +244,7 @@ The test suite covers model parsing/serialization, Interface widgets, language s
 - Models using external extensions depend on a correctly resolved NetLogo installation, extension directory, and classpath.
 - A persistent workspace can retain previously loaded Code; reload the VS Code window if execution appears stale after structural Code changes.
 - Editing a plot definition invalidates its workspace; run **Setup** when prompted to reload it.
-- Forever-loop FPS values are targets. Actual performance depends on the model, JVM, view exports, and rendering cost; very fast batches are bounded so **Stop** remains responsive.
+- Forever-loop FPS values are targets. The slider follows NetLogo's tick-based scale, but does not reproduce every adaptive or continuous-update policy of the desktop application. Actual performance depends on the model, JVM, view exports, and rendering cost; very fast batches are bounded so **Stop** remains responsive.
 
 ## License
 
