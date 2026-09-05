@@ -50,7 +50,7 @@ const vscode = __importStar(require("vscode"));
 const classicInterface_1 = require("./classicInterface");
 const netlogoInstallation_1 = require("./netlogoInstallation");
 const modelFormat_1 = require("./modelFormat");
-const plotCsv_1 = require("./plotCsv");
+const plotSnapshot_1 = require("./plotSnapshot");
 const view3D_1 = require("./view3D");
 const DEFAULT_COMMAND_TIMEOUT_MS = 60000;
 const DRAWING_3D_RENDER_LIMIT = 160000;
@@ -146,11 +146,11 @@ class NetLogoRunner {
                     : undefined;
                 const plotValues = [];
                 for (const plot of runtimeState.plots) {
-                    const csv = await this.tryExportPlot(session, plot);
-                    if (csv !== undefined) {
+                    const data = await this.tryExportPlot(session, plot);
+                    if (data !== undefined) {
                         plotValues.push({
                             ...plot,
-                            data: (0, plotCsv_1.parsePlotCsv)(csv)
+                            data
                         });
                     }
                 }
@@ -387,10 +387,10 @@ class NetLogoRunner {
     async tryExportPlot(session, plot) {
         const exportDir = path.join(this.context.globalStorageUri.fsPath, "plot-exports");
         fs.mkdirSync(exportDir, { recursive: true });
-        const exportPath = path.join(exportDir, `plot-${Date.now()}-${Math.random().toString(16).slice(2)}.csv`);
+        const exportPath = path.join(exportDir, `plot-${Date.now()}-${Math.random().toString(16).slice(2)}.bin`);
         try {
-            const base64Csv = await session.exportPlot(plot.plotName, exportPath);
-            return Buffer.from(base64Csv, "base64").toString("utf8");
+            await session.exportPlotBinary(plot.plotName, exportPath);
+            return (0, plotSnapshot_1.parsePlotBinary)(await fs.promises.readFile(exportPath));
         }
         catch (error) {
             this.output.appendLine(`Plot export failed (${plot.plotName}): ${error instanceof Error ? error.message : String(error)}`);
@@ -484,6 +484,11 @@ class NetLogoSession {
     }
     async exportPlot(plotName, filePath) {
         const next = this.commandChain.catch(() => undefined).then(() => this.exportPlotNow(plotName, filePath));
+        this.commandChain = next.then(() => undefined);
+        return next;
+    }
+    async exportPlotBinary(plotName, filePath) {
+        const next = this.commandChain.catch(() => undefined).then(() => this.exportPlotBinaryNow(plotName, filePath));
         this.commandChain = next.then(() => undefined);
         return next;
     }
@@ -604,6 +609,22 @@ class NetLogoSession {
                 }
             });
         }, Math.max(this.commandTimeoutMs, 5 * 60000));
+    }
+    async exportPlotBinaryNow(plotName, filePath) {
+        if (this.isDisposed) {
+            throw new Error("NetLogo session is already closed.");
+        }
+        await this.ready;
+        this.logVerbose(`netlogo:export-plot-binary> ${plotName}`);
+        return this.createPending(`export plot ${plotName}`, () => {
+            const encodedName = Buffer.from(plotName, "utf8").toString("base64");
+            const encodedPath = Buffer.from(filePath, "utf8").toString("base64");
+            this.child.stdin.write(`EXPORT_PLOT_BINARY ${encodedName} ${encodedPath}\n`, "utf8", error => {
+                if (error) {
+                    this.failPending(error);
+                }
+            });
+        });
     }
     async reportDrawing3DNow() {
         if (this.isDisposed) {

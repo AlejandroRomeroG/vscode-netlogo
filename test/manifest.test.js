@@ -77,10 +77,13 @@ test("extension registers native NetLogo open command", () => {
   const source = fs.readFileSync(path.join(root, "src", "extension.ts"), "utf8");
 
   assert.match(source, /registerCommand\("netlogo\.openInNetLogo"/);
-  assert.match(source, /function openInNativeNetLogo\(resource\?: vscode\.Uri\)/);
+  assert.match(source, /function openInNativeNetLogo\(nativeNetLogoLauncher: NativeNetLogoLauncher, resource\?: vscode\.Uri, output\?: vscode\.OutputChannel\)/);
+  assert.match(source, /openInNativeNetLogo\(nativeNetLogoLauncher, resource, output\)/);
   assert.match(source, /function nativeNetLogoAppForResource\(resource: vscode\.Uri\)/);
   assert.match(source, /findNativeNetLogoApp\(installation\.home, \{ threeD: resource\.fsPath\.toLowerCase\(\)\.endsWith\("\.nlogo3d"\) \}\)/);
-  assert.match(source, /new NativeNetLogoLauncher\(\)/);
+  assert.match(source, /new NativeNetLogoLauncher\(\{/);
+  assert.match(source, /globalState\.get\("netlogo\.nativeSessions\.v1"\)/);
+  assert.match(source, /globalState\.update\("netlogo\.nativeSessions\.v1", records\)/);
   assert.match(source, /nativeNetLogoLauncher\.openMacModel\(appPath, uri\.fsPath\)/);
   assert.match(source, /document\.isDirty && !await document\.save\(\)/);
   assert.match(source, /showErrorMessage\(`Could not open NetLogo:/);

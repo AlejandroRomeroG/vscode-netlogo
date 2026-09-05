@@ -255,7 +255,7 @@ test("generated plot renderer uses NetLogo's native pen colors", () => {
   const paletteEnd = script.indexOf("\n    function threeColorHex", paletteStart);
   const rgbStart = script.indexOf("function rgbToHex(red, green, blue)");
   const rgbEnd = script.indexOf("\n    function renderPlotBody", rgbStart);
-  const plotColorStart = script.indexOf("function plotCssColor(value)");
+  const plotColorStart = script.indexOf("function plotCssColor(");
   const plotColorEnd = script.indexOf("\n    function renderPlotAxes", plotColorStart);
   assert.ok([paletteStart, paletteEnd, rgbStart, rgbEnd, plotColorStart, plotColorEnd].every(index => index >= 0));
 

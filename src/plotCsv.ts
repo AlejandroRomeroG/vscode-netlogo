@@ -12,6 +12,9 @@ export interface PlotCsvPen {
   readonly interval: number;
   readonly color?: number;
   readonly x?: number;
+  readonly colorFormat?: "argb";
+  readonly hidden?: boolean;
+  readonly inLegend?: boolean;
   readonly points: readonly PlotCsvPoint[];
 }
 

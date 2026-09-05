@@ -12,6 +12,7 @@
   <p>
     <a href="#highlights">Highlights</a> ·
     <a href="#quick-start">Quick start</a> ·
+    <a href="#2d-viewer-and-long-runs">2D viewer</a> ·
     <a href="#3d-viewer">3D viewer</a> ·
     <a href="#commands">Commands</a> ·
     <a href="#configuration">Configuration</a> ·
@@ -34,7 +35,7 @@ NetLogo Tools brings a model-aware editing and execution workflow to VS Code whi
 | **Plots and monitors** | Multi-pen plots with native colors and modes, a comprehensive plot/pen editor, and NetLogo-style monitor labels and number formatting. |
 | **2D and 3D visualization** | Native 2D view exports plus an interactive Three.js viewer with uncapped visible patch export, native RGBA colors, sorted transparency, and reusable rendering buffers. |
 | **Language intelligence** | Syntax highlighting, completions, diagnostics, quick fixes, symbols, hover, definitions, references, highlights, and rename support. |
-| **Desktop integration** | Installation detection, runtime configuration, diagnostics, and **Open in NetLogo** with save-before-launch and separate native instances on macOS. |
+| **Desktop integration** | Installation detection, runtime configuration, diagnostics, and **Open in NetLogo** with save-before-launch and permission-free reuse of registered native sessions on macOS. |
 
 ## Supported model formats
 
@@ -85,15 +86,19 @@ code --install-extension ./vscode-netlogo-x.y.z.vsix --force
 - **Info** renders model documentation as Markdown and can switch back to its editable source; selecting preview content opens the corresponding source position.
 - **Interact** runs Interface buttons and updates sliders, switches, and choosers without enabling layout editing.
 - **Layout** enables selection, drag/resize interactions, keyboard movement, bounds editing, and widget-specific properties.
-- Returning to **Interact** clears the selection, resets Properties to **No selection**, and hides **Delete widget**.
+- Returning to **Interact** clears the selection, shows **Switch to Layout to edit widget properties.** in Properties, and hides **Delete widget**. **No selection** is reserved for Layout without a selected widget.
 - Supported widgets include views, buttons, sliders, switches, choosers, monitors, plots, inputs, text boxes, and output areas.
+- Slider boxes reserve at least 35px of height so their native thumb and numeric value stay inside the border, including in compact imported interfaces.
+- Switches use one vertically centered checkbox/text row with an associated clickable label, without a duplicate heading.
 - `Cmd+S` on macOS or `Ctrl+S` on Windows/Linux saves back to the real model document.
 
 ### Plots and monitors
 
-- Reads complete native `export-plot` data, including multiple pens, unequal series lengths, color changes, pen-up points, runtime ranges, and legends.
+- Reads complete native binary plot snapshots, including multiple pens, unequal series lengths, exact RGB colors, color changes, pen-up points, runtime ranges, and legends. CSV parsing remains available for compatibility checks.
 - Renders NetLogo **Line**, **Bar**, and **Point** pen modes with native palette colors and intervals.
 - Draws plot series in front of the axes, so a line at zero remains visible.
+- Fits plots to each widget's actual dimensions without enlarging text or clipping the lower axis. Legends have a separate scrollable area; long names retain their full tooltip instead of stretching their glyphs.
+- Formats axis labels to the domain's precision, retaining small acceleration values and using scientific notation for extreme scales. Crowded widgets reduce tick-label density; `NIL` axis titles remain absent.
 - Edits plot title, axes, ranges, auto-scaling, legend visibility, plot setup/update commands, and every pen's name, color, mode, interval, legend status, and setup/update commands.
 - Offers all 154 default NetLogo 6.4 color swatches.
 - Displays monitor titles correctly and formats numeric output with precision-aware rounding, grouping separators, trimmed decimal zeroes, and scientific notation when appropriate.
@@ -103,10 +108,20 @@ code --install-extension ./vscode-netlogo-x.y.z.vsix --force
 - Keeps a persistent headless workspace per model and runtime configuration.
 - Saves and synchronizes stored Interface control values before execution.
 - Refreshes ticks, monitors, plots, and views after each command.
+- Sends editor status messages to **Output → NetLogo**, prefixed with the model name. The toolbar stays clear, and repeated Forever status messages are not logged for every tick. **NetLogo: Show Output** opens the channel without taking focus from the editor.
 - Maps the speed slider to NetLogo's tick-based speed scale, including its central normal-speed range and nonlinear slow/fast response. Normal speed uses the model's configured view frame rate, with 30 FPS as the fallback.
 - Uses bounded command batches at high speeds to keep **Stop** responsive. The displayed FPS is a target, not a measurement; actual pacing is not guaranteed to match NetLogo Desktop frame for frame.
 - Keeps the tick counter vertically centered and the **Forever / Stop** button at fixed dimensions and alignment; only its label and color change when running.
 - Displays 2D models from NetLogo's own exported PNG view.
+
+### 2D viewer and long runs
+
+- Keeps NetLogo's native 2D rendering, turtle shapes, colors, and transparency; the extension displays its PNG without recoloring it.
+- Updates the existing image, monitors, and plots between commands without rebuilding the controls or Properties panel on every frame. Layout changes and the first view still trigger a complete render.
+- Reads plot histories directly through the native plot API instead of converting the full history to CSV and back each frame. Every point remains available, including after pen resets, histogram replacement, and changes to temporary pens.
+- Builds each continuous SVG line segment once, avoiding the repeated parsing of growing path prefixes that slowed long-running models. Native pen visibility and legend settings are retained.
+
+The [2D performance and color checks](docs/2d-rendering.md) include **Wolf Sheep Simple 5** at 100, 5,000, and 10,000 ticks. They separate simulation, image export, plot transfer, and browser rendering costs. Full plot histories still grow with the run; the viewer does not discard old points to maintain a fixed memory or FPS budget. Scaling the native image to a smaller widget can blend edge pixels even though the source PNG colors are unchanged.
 
 ### 3D viewer
 
@@ -124,10 +139,12 @@ See [3D rendering and validation](docs/3d-rendering.md) for the binary format, n
 ### Native desktop integration
 
 - **Open in NetLogo** saves pending model edits before launching; cancelling or failing the save prevents opening an outdated copy.
-- On macOS, the selected 2D or 3D application starts a **separate native instance** with the model supplied at startup. This preserves other open models and avoids the 3D canvas freeze observed when replacing a model through a macOS file-open event.
-- Concurrent launch requests for the same model are combined while the launch command is in progress. The editor button shows a busy state, and launch failures are reported instead of silently retried through another application.
+- On macOS, repeated clicks **activate the session previously launched for that file**. A local VS Code registry stores the canonical file path, application, process ID, and process start time; it survives window reloads and drops closed or replaced processes. This does not read window titles, inspect the screen, or require Screen Recording or Accessibility permission.
+- When no unregistered native sessions are present, another model starts a **separate native instance** in the selected 2D or 3D application, with the model supplied at startup. This preserves other open models and avoids the 3D canvas freeze observed when replacing a model through a macOS file-open event. Launch Services returns the exact new process, so registration does not guess from a before/after list.
+- Sessions opened manually or before this registry was installed are **not assigned a model by guesswork**. The button offers **Go to NetLogo** (with a session picker when needed), without launching another copy or requesting additional permissions.
+- Concurrent requests for the same file are combined, and registry updates for different files are serialized. The editor button shows a busy state; activation and launch results go to **Output → NetLogo**. Failures are not silently retried. Windows and Linux retain their platform file associations.
 
-Native and VS Code simulations are independent. First launch still includes JVM and model initialization; a successful launch notification means the request was accepted, not that loading is complete. Close unused native instances to release their memory.
+Native and VS Code simulations are independent. Activating an existing native session does not reload its model, reset its simulation, or discard native edits. **The registry records the file used at launch, not the current native document:** if you use **File → Open**, **New**, or **Save As** inside NetLogo, that session may now contain a different model. This is session reuse, not universal detection of every open model. First launch still includes JVM and model initialization; a successful launch notification means the process started, not that loading is complete. Close unused native instances to release their memory.
 
 ### NetLogo language tools
 
@@ -202,9 +219,9 @@ Increase `netlogo.commandTimeoutMs` for long-running models. Enable `netlogo.ver
 </details>
 
 <details>
-<summary><strong>NetLogo Desktop is slow to open or opens another window</strong></summary>
+<summary><strong>NetLogo Desktop is slow to open or the button offers Go to NetLogo</strong></summary>
 
-Allow the native JVM and model to finish loading before clicking again. A later click can deliberately open another copy; duplicate suppression applies only while the launch command is in progress. Separate instances on macOS are intentional and preserve already-open models. If launch fails, check the reported error and **NetLogo: Show Output**, then verify the installation through **NetLogo: Configure NetLogo**.
+Allow the native JVM and model to finish loading. **Go to NetLogo** means an existing session was not launched with this version's registry, so its current model is unknown; it is not a missing screen permission. Use that action to visit the existing session. To register a fresh launch, first close the unregistered native sessions when you no longer need them, then use **Open in NetLogo** again. The extension never closes them for you. If you changed files inside a registered native session, repeated clicks still return to that original session. Check **NetLogo: Show Output** for launch errors, and verify the installation through **NetLogo: Configure NetLogo** if needed.
 
 </details>
 
@@ -227,10 +244,13 @@ Useful scripts:
 | `npm run package:list` | Inspect the files included in the VSIX |
 | `npm run test:e2e` | Run the VS Code Electron smoke test |
 | `node scripts/previewToolbar.js` | Serve a localhost geometry-check page for tick alignment and the Forever/Stop transition; open the printed URL and select **Check geometry** |
+| `node scripts/previewPlotLayout.js` | Check the actual plot CSS and drawing functions at Traffic widget sizes, narrow/wide/tall sizes, multiple zoom levels, and with many pens |
+| `node scripts/previewSliderLayout.js` | Check slider thumb/value containment and checkbox/text centering at compact and tall sizes, multiple zoom levels, and in Interact/Layout modes |
 
 The test suite covers model parsing/serialization, Interface widgets, language services, runtime lifecycle, plots, monitors, generated webview behavior, and native launch/save/error handling. The 3D checks cover binary decoding, native colors and visibility, transparency ordering, exposed patch faces, inspection, and GPU resource reuse/disposal. When a local NetLogo installation is available, integration tests also exercise real sample models through the Java bridge, check complete patch/agent counts, and verify that taking a snapshot does not consume the model's random-number sequence. Set `NETLOGO_HOME` to select a specific installation for integration tests.
 
 For reproducible 3D export benchmarks and a local visual check, see [3D rendering and validation](docs/3d-rendering.md).
+For native 2D/plot benchmarks and a browser comparison of long plot histories, see [2D performance and color checks](docs/2d-rendering.md).
 
 ## Compatibility and known limitations
 

@@ -42,17 +42,18 @@ const modelFormat_1 = require("./modelFormat");
 const netlogoInstallation_1 = require("./netlogoInstallation");
 const runner_1 = require("./runner");
 class NetLogoModelEditorProvider {
-    static register(context, runner) {
-        return vscode.window.registerCustomEditorProvider(NetLogoModelEditorProvider.viewType, new NetLogoModelEditorProvider(context, runner), {
+    static register(context, runner, output) {
+        return vscode.window.registerCustomEditorProvider(NetLogoModelEditorProvider.viewType, new NetLogoModelEditorProvider(context, runner, output), {
             supportsMultipleEditorsPerDocument: true,
             webviewOptions: {
                 retainContextWhenHidden: true
             }
         });
     }
-    constructor(context, runner) {
+    constructor(context, runner, output) {
         this.context = context;
         this.runner = runner;
+        this.output = output;
         this.runtimeConfiguredCache = new Map();
     }
     async resolveCustomTextEditor(document, webviewPanel) {
@@ -150,6 +151,12 @@ class NetLogoModelEditorProvider {
             }
             if (message.type === "show-output") {
                 await vscode.commands.executeCommand("netlogo.showOutput");
+                return;
+            }
+            if (message.type === "editor-status") {
+                if (typeof message.message === "string" && message.message.trim()) {
+                    this.output.appendLine(`[${path.basename(document.fileName)}] ${message.message}`);
+                }
                 return;
             }
             if (message.type === "open-native") {
@@ -1165,8 +1172,32 @@ class NetLogoModelEditorProvider {
     }
 
     .slider-widget {
-      grid-template-rows: minmax(12px, auto) minmax(13px, 1fr);
-      padding: 3px 6px;
+      min-height: 35px;
+      grid-template-rows: 12px minmax(16px, 1fr);
+      gap: 1px;
+      padding: 2px 6px;
+    }
+
+    .slider-widget .control-heading {
+      line-height: 12px;
+    }
+
+    .slider-widget .control-value {
+      line-height: 14px;
+    }
+
+    .switch-widget {
+      grid-template-rows: minmax(0, 1fr);
+      gap: 0;
+      padding: 3px 7px;
+    }
+
+    .switch-widget .control-value {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      text-align: left;
+      line-height: 16px;
     }
 
     .slider-row,
@@ -1242,11 +1273,17 @@ class NetLogoModelEditorProvider {
     .runtime-slider {
       width: 100%;
       min-width: 0;
-      height: 14px;
+      height: 16px;
+      margin: 0;
+      padding: 0;
     }
 
     .runtime-checkbox {
       flex: none;
+      width: 13px;
+      height: 13px;
+      margin: 0;
+      padding: 0;
     }
 
     .runtime-select {
@@ -1267,20 +1304,28 @@ class NetLogoModelEditorProvider {
 
     .plot-widget {
       display: grid;
-      grid-template-rows: auto 1fr auto;
+      grid-template-rows: 22px minmax(0, 1fr);
       padding: 0;
+    }
+
+    .plot-title {
+      min-width: 0;
+      line-height: 13px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
 
     .plot-body {
       position: relative;
+      min-width: 0;
+      min-height: 0;
       margin: 8px;
-      background-image:
-        linear-gradient(to right, color-mix(in srgb, var(--vscode-editor-foreground) 8%, transparent) 1px, transparent 1px),
-        linear-gradient(to bottom, color-mix(in srgb, var(--vscode-editor-foreground) 8%, transparent) 1px, transparent 1px);
-      background-size: 24px 18px;
     }
 
     .plot-svg {
+      position: absolute;
+      inset: 0;
       width: 100%;
       height: 100%;
       display: block;
@@ -1304,41 +1349,54 @@ class NetLogoModelEditorProvider {
     .plot-no-data {
       fill: var(--vscode-descriptionForeground);
       font-family: var(--vscode-font-family);
-      font-size: 8px;
+      font-size: 11px;
     }
 
     .plot-axis-label {
-      font-size: 9px;
+      font-size: 11px;
     }
 
     .plot-no-data {
       text-anchor: middle;
     }
 
+    .plot-legend {
+      position: absolute;
+      top: 0;
+      right: 0;
+      bottom: 0;
+      min-width: 0;
+      overflow: auto;
+      scrollbar-width: thin;
+      font-size: 11px;
+      line-height: 16px;
+    }
+
+    .plot-legend-item {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      min-width: 0;
+      height: 16px;
+    }
+
     .plot-legend-label {
-      fill: var(--vscode-editor-foreground);
-      font-family: var(--vscode-font-family);
-      font-size: 7px;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
 
     .plot-legend-swatch {
-      stroke: color-mix(in srgb, var(--vscode-editor-foreground) 30%, transparent);
-      stroke-width: 0.5;
+      flex: 0 0 8px;
+      height: 8px;
+      border: 1px solid color-mix(in srgb, var(--vscode-editor-foreground) 30%, transparent);
     }
 
     .plot-empty {
       display: grid;
       place-items: center;
       height: 100%;
-      color: var(--vscode-descriptionForeground);
-      font-size: 11px;
-    }
-
-    .plot-footer {
-      display: flex;
-      justify-content: space-between;
-      gap: 8px;
-      padding: 0 8px 6px;
       color: var(--vscode-descriptionForeground);
       font-size: 11px;
     }
@@ -1406,31 +1464,6 @@ class NetLogoModelEditorProvider {
       place-items: center;
       height: 100%;
       color: var(--vscode-descriptionForeground);
-    }
-
-    .status {
-      display: inline-flex;
-      align-items: center;
-      width: 35ch;
-      min-width: 35ch;
-      min-height: 28px;
-      height: 28px;
-      max-height: 28px;
-      padding: 4px 8px;
-      overflow-x: auto;
-      overflow-y: hidden;
-      border: 1px solid var(--vscode-input-border, var(--vscode-panel-border));
-      border-radius: 4px;
-      color: var(--vscode-descriptionForeground);
-      background: var(--vscode-editorWidget-background);
-      font-size: 11px;
-      scrollbar-width: thin;
-      text-align: left;
-      white-space: nowrap;
-    }
-
-    .status::-webkit-scrollbar {
-      height: 4px;
     }
 
     .runtime-banner {
@@ -1641,7 +1674,6 @@ class NetLogoModelEditorProvider {
         <div id="fileName" class="filename">NetLogo</div>
       </div>
       <div class="actions">
-        <span id="status" class="status">Ready</span>
         <button id="commandButton" type="button" title="Run NetLogo command">Command...</button>
         <button id="openNativeButton" type="button" title="Open in native NetLogo">Open in NetLogo</button>
         <label class="speed-control" title="Forever speed">
@@ -1858,6 +1890,7 @@ class NetLogoModelEditorProvider {
     const state = {
       version: 0,
       hasLoadedModel: false,
+      lastStatusMessage: null,
       activeTab: validUiTab(restoredUiState.activeTab),
       code: "",
       interfaceSource: "",
@@ -1894,7 +1927,6 @@ class NetLogoModelEditorProvider {
     };
 
     const fileName = document.getElementById("fileName");
-    const status = document.getElementById("status");
     const content = document.querySelector(".content");
     const surface = document.getElementById("surface");
     const propertiesPanel = document.getElementById("propertiesPanel");
@@ -2245,8 +2277,11 @@ class NetLogoModelEditorProvider {
     }
 
     function setStatus(message) {
-      status.textContent = message;
-      status.title = message;
+      if (!message || message === state.lastStatusMessage) {
+        return;
+      }
+      state.lastStatusMessage = message;
+      vscode.postMessage({ type: "editor-status", message });
     }
 
     function updateEditorLayout() {
@@ -3108,7 +3143,9 @@ class NetLogoModelEditorProvider {
     function postRunCommand(command, silent, repeat = 1) {
       state.runtimeStatus = "running";
       updateRuntimeBanner();
-      setStatus("Running " + command);
+      if (!state.runLoop) {
+        setStatus("Running " + command);
+      }
       vscode.postMessage({ type: "run-command", command, repeat, silent });
     }
 
@@ -3455,6 +3492,49 @@ class NetLogoModelEditorProvider {
       return refreshed;
     }
 
+    function refreshMountedTwoViews() {
+      if (!state.viewImageDataUri || state.view3DState || state.interaction) {
+        return false;
+      }
+
+      const views = (state.interfacePreview.widgets ?? []).filter(widget => widget.kind === "view");
+      const mounted = surface.querySelectorAll(".view-widget");
+      if (!views.length || mounted.length !== views.length) {
+        return false;
+      }
+
+      const expected = new Set(views.map(widget => widget.id));
+      const images = [];
+      for (const element of mounted) {
+        const image = element.querySelector(".view-image");
+        if (!image || !expected.delete(element.dataset.widgetId)) {
+          return false;
+        }
+        images.push(image);
+      }
+      for (const image of images) {
+        if (image.src !== state.viewImageDataUri) {
+          image.src = state.viewImageDataUri;
+        }
+      }
+      return true;
+    }
+
+    function refreshPlotBody(element, widget) {
+      const previous = element.querySelector(".plot-body");
+      if (!previous) {
+        return;
+      }
+      const previousLegend = previous.querySelector(".plot-legend");
+      const scrollTop = previousLegend?.scrollTop ?? 0;
+      const body = renderPlotBody(widget);
+      previous.replaceWith(body);
+      const legend = body.querySelector(".plot-legend");
+      if (legend) {
+        legend.scrollTop = scrollTop;
+      }
+    }
+
     function refreshMountedRuntimeWidgets() {
       for (const element of surface.querySelectorAll(".widget")) {
         const widget = findWidget(element.dataset.widgetId);
@@ -3467,10 +3547,7 @@ class NetLogoModelEditorProvider {
             value.textContent = formatMonitorValue(state.runtimeValues[widget.id] ?? "...", widget.details?.precision);
           }
         } else if (widget.kind === "plot") {
-          const plotBody = element.querySelector(".plot-body");
-          if (plotBody) {
-            plotBody.replaceWith(renderPlotBody(widget));
-          }
+          refreshPlotBody(element, widget);
         }
       }
     }
@@ -3522,6 +3599,8 @@ class NetLogoModelEditorProvider {
       const canRefresh3DOnly = Boolean(result.view3DState)
         && !result.viewImageDataUri;
       if (canRefresh3DOnly && refreshMountedThreeViews()) {
+        refreshMountedRuntimeWidgets();
+      } else if (refreshMountedTwoViews()) {
         refreshMountedRuntimeWidgets();
       } else {
         renderInterface();
@@ -3657,6 +3736,9 @@ class NetLogoModelEditorProvider {
       interaction.pendingTransform = null;
       applyWidgetBounds(widget, bounds);
       writeElementBounds(interaction.element, bounds);
+      if (widget.kind === "plot") {
+        refreshPlotBody(interaction.element, widget);
+      }
       updateSurfaceBounds();
     }
 
@@ -3825,14 +3907,16 @@ class NetLogoModelEditorProvider {
     }
 
     function renderProperties() {
-      const widget = findWidget(state.selectedWidgetId);
+      const widget = state.interfaceMode === "layout" ? findWidget(state.selectedWidgetId) : null;
       propertiesPanel.replaceChildren();
       deleteWidgetButton.disabled = state.interfaceMode !== "layout" || !widget;
 
       if (!widget) {
         propertiesPanel.append(
           node("h2", "properties-title", "Properties"),
-          node("div", "no-selection", "No selection")
+          node("div", "no-selection", state.interfaceMode === "layout"
+            ? "No selection"
+            : "Switch to Layout to edit widget properties.")
         );
         return;
       }
@@ -4265,7 +4349,7 @@ class NetLogoModelEditorProvider {
       const sizes = {
         view: { width: 440, height: 440 },
         button: { width: 90, height: 34 },
-        slider: { width: 180, height: 33 },
+        slider: { width: 180, height: 35 },
         switch: { width: 120, height: 33 },
         chooser: { width: 180, height: 45 },
         monitor: { width: 160, height: 45 },
@@ -4325,7 +4409,7 @@ class NetLogoModelEditorProvider {
 
     function widgetMinimumSize(kind) {
       const sizes = {
-        slider: { width: 90, height: 34 },
+        slider: { width: 90, height: 35 },
         switch: { width: 80, height: 30 },
         chooser: { width: 100, height: 34 },
         monitor: { width: 90, height: 34 },
@@ -4356,12 +4440,9 @@ class NetLogoModelEditorProvider {
             ])
           ]);
         case "switch":
-          return fragment([
-            node("div", "control-heading", displayName(widget)),
-            node("div", "switch-row", [
-              renderRuntimeSwitch(widget),
-              node("span", "control-value", widget.details?.variable ?? "")
-            ])
+          return node("label", "switch-row", [
+            renderRuntimeSwitch(widget),
+            node("span", "control-value", displayName(widget))
           ]);
         case "chooser":
           return fragment([
@@ -4376,11 +4457,7 @@ class NetLogoModelEditorProvider {
         case "plot":
           return fragment([
             node("div", "plot-title", widget.label),
-            renderPlotBody(widget),
-            node("div", "plot-footer", [
-              node("span", "", widget.details?.xAxis ?? "x"),
-              node("span", "", widget.details?.yAxis ?? "y")
-            ])
+            renderPlotBody(widget)
           ]);
         case "input":
           return fragment([
@@ -4408,6 +4485,7 @@ class NetLogoModelEditorProvider {
 
       if (state.viewImageDataUri) {
         const image = node("img", "view-image", "");
+        image.decoding = "async";
         image.src = state.viewImageDataUri;
         image.alt = "NetLogo view";
         return image;
@@ -6258,30 +6336,37 @@ class NetLogoModelEditorProvider {
       const body = node("div", "plot-body" + (points.length > 0 ? " has-runtime" : ""), "");
       const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
       svg.setAttribute("class", "plot-svg");
-      svg.setAttribute("viewBox", "0 0 160 120");
-      svg.setAttribute("preserveAspectRatio", "none");
 
       const xDomain = plotDomain(points, widget, runtimePlot, "x", configurationDirty);
       const yDomain = plotDomain(points, widget, runtimePlot, "y", configurationDirty);
-      const plotFrame = plotFrameForDomains(xDomain, yDomain);
+      const legendEnabled = !configurationDirty && typeof runtimePlot?.legend === "boolean"
+        ? runtimePlot.legend
+        : widget.details?.legend !== false;
+      const legendSeries = legendEnabled ? series.filter(pen => pen.inLegend !== false) : [];
+      const plotFrame = plotFrameForDomains(xDomain, yDomain, widget, legendSeries);
+      // Without a viewBox transform, one SVG unit stays one CSS pixel, even
+      // when browser zoom rounds borders to device pixels. The absolutely
+      // positioned SVG cannot enlarge its grid track.
+      svg.setAttribute("role", "img");
+      svg.setAttribute("aria-label", widget.label || "Plot");
       renderPlotAxes(svg, plotFrame, xDomain, yDomain, widget);
       const seriesLayer = plotSeriesLayer(svg, plotFrame, widget.id);
 
       if (points.length === 0) {
-        svg.append(svgText("No numeric data", 89, 50, "plot-no-data"));
+        const empty = svgText("No numeric data", (plotFrame.left + plotFrame.right) / 2,
+          (plotFrame.top + plotFrame.bottom) / 2, "plot-no-data");
+        fitPlotText(empty, plotFrame.right - plotFrame.left);
+        svg.append(empty);
       } else {
         for (const pen of series) {
           renderPlotSeries(seriesLayer, pen, plotFrame, xDomain, yDomain);
         }
       }
 
-      const legendEnabled = !configurationDirty && typeof runtimePlot?.legend === "boolean"
-        ? runtimePlot.legend
-        : widget.details?.legend !== false;
-      if (legendEnabled) {
-        renderPlotLegend(svg, series.filter(pen => pen.inLegend !== false));
-      }
       body.append(svg);
+      if (legendSeries.length) {
+        renderPlotLegend(body, legendSeries, plotFrame.legendWidth);
+      }
       return body;
     }
 
@@ -6336,6 +6421,8 @@ class NetLogoModelEditorProvider {
           return {
             ...runtime,
             ...configured,
+            colorFormat: configured.colorFormat,
+            pointColorFormat: runtime.colorFormat,
             points: Array.isArray(runtime.points) ? runtime.points : []
           };
         });
@@ -6346,16 +6433,23 @@ class NetLogoModelEditorProvider {
         return {
           ...configured,
           ...pen,
-          inLegend: configured.inLegend !== false,
+          inLegend: pen.inLegend ?? (configured.inLegend !== false),
           points: Array.isArray(pen.points) ? pen.points : []
         };
       });
     }
 
     function renderPlotSeries(svg, pen, frame, xDomain, yDomain) {
+      if (pen.hidden === true) {
+        return;
+      }
       const points = Array.isArray(pen.points) ? pen.points : [];
       const mode = Number(pen.mode ?? 0);
       const fallbackColor = pen.color;
+      const pointColor = point => plotCssColor(
+        point.color ?? fallbackColor,
+        point.color == null ? pen.colorFormat : (pen.pointColorFormat ?? pen.colorFormat)
+      );
       if (mode === 1) {
         const baseline = scaleLinear(0, yDomain, frame.bottom, frame.top);
         const interval = Number.isFinite(Number(pen.interval)) ? Number(pen.interval) : 0;
@@ -6367,7 +6461,7 @@ class NetLogoModelEditorProvider {
           bar.setAttribute("y", String(Math.min(baseline, normalized[1])));
           bar.setAttribute("width", String(Math.abs(barEndX - normalized[0])));
           bar.setAttribute("height", String(Math.abs(normalized[1] - baseline)));
-          bar.setAttribute("fill", plotCssColor(point.color ?? fallbackColor));
+          bar.setAttribute("fill", pointColor(point));
           bar.setAttribute("class", "plot-series-bar");
           svg.append(bar);
         }
@@ -6377,23 +6471,36 @@ class NetLogoModelEditorProvider {
       if (mode === 2) {
         for (const point of points) {
           const normalized = normalizePlotPoint(point, frame, xDomain, yDomain);
-          svg.append(svgPlotPoint(normalized[0], normalized[1], plotCssColor(point.color ?? fallbackColor)));
+          svg.append(svgPlotPoint(normalized[0], normalized[1], pointColor(point)));
         }
         return;
       }
 
       let previous;
-      let path;
       let pathColor;
-      let pathData = "";
+      let pathData = [];
+      const flushPath = () => {
+        if (pathData.length === 0) {
+          return;
+        }
+        const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+        path.setAttribute("fill", "none");
+        path.setAttribute("stroke", pathColor);
+        path.setAttribute("stroke-width", "1");
+        path.setAttribute("vector-effect", "non-scaling-stroke");
+        // Submit each complete segment once. Reassigning every growing prefix
+        // makes SVG path parsing quadratic in the number of recorded points.
+        path.setAttribute("d", pathData.join(" "));
+        svg.append(path);
+        pathData = [];
+      };
       for (const point of points) {
         const normalized = normalizePlotPoint(point, frame, xDomain, yDomain);
-        const color = plotCssColor(point.color ?? fallbackColor);
+        const color = pointColor(point);
         if (point.penDown === false) {
+          flushPath();
           previous = normalized;
-          path = undefined;
           pathColor = undefined;
-          pathData = "";
           continue;
         }
 
@@ -6401,22 +6508,16 @@ class NetLogoModelEditorProvider {
           svg.append(svgPlotPoint(normalized[0], normalized[1], color));
           previous = normalized;
           continue;
-        } else if (!path || pathColor !== color) {
-          path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+        } else if (pathData.length === 0 || pathColor !== color) {
+          flushPath();
           pathColor = color;
-          pathData = "M " + previous[0] + " " + previous[1] + " L " + normalized[0] + " " + normalized[1];
-          path.setAttribute("fill", "none");
-          path.setAttribute("stroke", color);
-          path.setAttribute("stroke-width", "1");
-          path.setAttribute("vector-effect", "non-scaling-stroke");
-          path.setAttribute("d", pathData);
-          svg.append(path);
+          pathData = ["M", previous[0], previous[1], "L", normalized[0], normalized[1]];
         } else {
-          pathData += " L " + normalized[0] + " " + normalized[1];
-          path.setAttribute("d", pathData);
+          pathData.push("L", normalized[0], normalized[1]);
         }
         previous = normalized;
       }
+      flushPath();
     }
 
     function svgPlotPoint(x, y, fill) {
@@ -6429,38 +6530,32 @@ class NetLogoModelEditorProvider {
       return point;
     }
 
-    function renderPlotLegend(svg, series) {
-      const columnCount = Math.max(1, Math.ceil(series.length / 8));
-      const columnWidth = Math.min(42, 140 / columnCount);
-      const legendLeft = Math.max(8, 150 - columnWidth * columnCount);
-      series.forEach((pen, index) => {
-        const column = Math.floor(index / 8);
-        const row = index % 8;
-        const x = legendLeft + column * columnWidth;
-        const y = 9 + row * 9;
-        const swatch = document.createElementNS("http://www.w3.org/2000/svg", "rect");
-        swatch.setAttribute("x", String(x));
-        swatch.setAttribute("y", String(y - 5));
-        swatch.setAttribute("width", "6");
-        swatch.setAttribute("height", "6");
-        swatch.setAttribute("fill", plotCssColor(pen.color));
-        swatch.setAttribute("class", "plot-legend-swatch");
-        svg.append(swatch);
-        const labelText = String(pen.name ?? "Pen");
-        const label = svgText(labelText, x + 9, y, "plot-legend-label");
-        label.setAttribute("text-anchor", "start");
-        const availableWidth = Math.max(4, columnWidth - 10);
-        if (labelText.length * 3.8 > availableWidth) {
-          label.setAttribute("textLength", String(availableWidth));
-          label.setAttribute("lengthAdjust", "spacingAndGlyphs");
-        }
-        svg.append(label);
-      });
+    function renderPlotLegend(body, series, width) {
+      const legend = node("div", "plot-legend", "");
+      legend.style.width = width + "px";
+      legend.setAttribute("role", "list");
+      legend.setAttribute("aria-label", "Plot pens");
+      for (const pen of series) {
+        const swatch = node("span", "plot-legend-swatch", "");
+        swatch.style.backgroundColor = plotCssColor(pen.color, pen.colorFormat);
+        swatch.setAttribute("aria-hidden", "true");
+        const name = String(pen.name ?? "Pen");
+        const label = node("span", "plot-legend-label", name);
+        const item = node("div", "plot-legend-item", [swatch, label]);
+        item.title = name;
+        item.setAttribute("role", "listitem");
+        legend.append(item);
+      }
+      // Legends scroll independently instead of covering series, squeezing
+      // glyphs, or dropping pens when there are more rows than available space.
+      body.append(legend);
     }
 
-    function plotCssColor(value) {
+    function plotCssColor(value, format) {
       const numeric = Number(value);
-      const hex = Number.isFinite(numeric) && (numeric < 0 || numeric > 140)
+      // Native plot drawing ignores ARGB alpha, but small RGB values must not
+      // be mistaken for palette numbers (for example ARGB 15 is dark blue).
+      const hex = format === "argb" || (Number.isFinite(numeric) && (numeric < 0 || numeric > 140))
         ? ((numeric >>> 0) & 0xffffff)
         : netLogoColorHex(numeric);
       return "#" + hex.toString(16).padStart(6, "0");
@@ -6469,13 +6564,30 @@ class NetLogoModelEditorProvider {
     function renderPlotAxes(svg, frame, xDomain, yDomain, widget) {
       const xTicks = axisTicks(xDomain);
       const yTicks = axisTicks(yDomain);
+      if (xTicks.length === 3) {
+        const labelWidths = xTicks.map(tick => plotTextWidth(formatTick(tick, xDomain)));
+        if ((frame.right - frame.left) / 2 < Math.max(labelWidths[0], labelWidths[2]) + labelWidths[1] / 2 + 8) {
+          xTicks.splice(1, 1);
+        }
+      }
+      if (xTicks.length === 2 && frame.right - frame.left <
+          plotTextWidth(formatTick(xTicks[0], xDomain)) + plotTextWidth(formatTick(xTicks[1], xDomain)) + 8) {
+        xTicks.shift();
+      }
+      if (yTicks.length === 3 && frame.bottom - frame.top < 36) {
+        yTicks.splice(1, 1);
+      }
+      if (yTicks.length === 2 && frame.bottom - frame.top < 14) {
+        yTicks.shift();
+      }
 
       xTicks.forEach((tick, index) => {
         const x = scaleLinear(tick, xDomain, frame.left, frame.right);
         svg.append(svgLine(x, frame.top, x, frame.bottom, "plot-grid-line"));
         svg.append(svgLine(x, frame.bottom, x, frame.bottom + 3, "plot-tick"));
-        const label = svgText(formatTick(tick), x, frame.xTickY, "plot-tick-label");
-        label.setAttribute("text-anchor", index === 0 ? "start" : index === xTicks.length - 1 ? "end" : "middle");
+        const label = svgText(formatTick(tick, xDomain), x, frame.xTickY, "plot-tick-label");
+        label.setAttribute("data-axis", "x");
+        label.setAttribute("text-anchor", xTicks.length === 1 ? "end" : index === 0 ? "start" : index === xTicks.length - 1 ? "end" : "middle");
         svg.append(label);
       });
 
@@ -6483,7 +6595,8 @@ class NetLogoModelEditorProvider {
         const y = scaleLinear(tick, yDomain, frame.bottom, frame.top);
         svg.append(svgLine(frame.left, y, frame.right, y, "plot-grid-line"));
         svg.append(svgLine(frame.left - 3, y, frame.left, y, "plot-tick"));
-        const label = svgText(formatTick(tick), frame.left - 5, y + 2, "plot-tick-label");
+        const label = svgText(formatTick(tick, yDomain), frame.left - 5, y + 4, "plot-tick-label");
+        label.setAttribute("data-axis", "y");
         label.setAttribute("text-anchor", "end");
         svg.append(label);
       }
@@ -6491,14 +6604,20 @@ class NetLogoModelEditorProvider {
       svg.append(svgLine(frame.left, frame.top, frame.left, frame.bottom, "plot-axis"));
       svg.append(svgLine(frame.left, frame.bottom, frame.right, frame.bottom, "plot-axis"));
 
-      const xLabel = svgText(axisLabel(widget.details?.xAxis, "x"), (frame.left + frame.right) / 2, frame.xLabelY, "plot-axis-label");
-      xLabel.setAttribute("text-anchor", "middle");
-      svg.append(xLabel);
-
-      const yLabel = svgText(axisLabel(widget.details?.yAxis, "y"), 7, (frame.top + frame.bottom) / 2, "plot-axis-label");
-      yLabel.setAttribute("text-anchor", "middle");
-      yLabel.setAttribute("transform", "rotate(-90 7 " + ((frame.top + frame.bottom) / 2) + ")");
-      svg.append(yLabel);
+      if (frame.showXLabel) {
+        const xLabel = svgText(axisLabel(widget.details?.xAxis), (frame.left + frame.right) / 2, frame.xLabelY, "plot-axis-label");
+        xLabel.setAttribute("text-anchor", "middle");
+        fitPlotText(xLabel, frame.right - frame.left);
+        svg.append(xLabel);
+      }
+      if (frame.showYLabel) {
+        const centerY = (frame.top + frame.bottom) / 2;
+        const yLabel = svgText(axisLabel(widget.details?.yAxis), 10, centerY, "plot-axis-label");
+        yLabel.setAttribute("text-anchor", "middle");
+        yLabel.setAttribute("transform", "rotate(-90 10 " + centerY + ")");
+        fitPlotText(yLabel, frame.bottom - frame.top);
+        svg.append(yLabel);
+      }
     }
 
     function normalizePlotPoint(point, frame, xDomain, yDomain) {
@@ -6561,25 +6680,51 @@ class NetLogoModelEditorProvider {
       return [configuredMin === 0 && lower < 0 && dataMin >= 0 ? 0 : lower, upper];
     }
 
-    function plotFrameForDomains(xDomain, yDomain) {
-      const yLabelWidth = Math.max(...axisTicks(yDomain).map(tick => estimateTickLabelWidth(formatTick(tick))));
+    function plotFrameForDomains(xDomain, yDomain, widget, legendSeries) {
+      // Match .plot-widget's two borders, 22px title and 8px body margins.
+      const width = Math.max(1, widget.width - 18);
+      const height = Math.max(1, widget.height - 40);
+      const showXLabel = Boolean(axisLabel(widget.details?.xAxis)) && height >= 64;
+      const showYLabel = Boolean(axisLabel(widget.details?.yAxis)) && width >= 180 && height >= 90;
+      const yLabelWidth = Math.max(...axisTicks(yDomain).map(tick => plotTextWidth(formatTick(tick, yDomain))));
+      const legendWidth = legendSeries.length
+        ? Math.min(width * 0.4, legendSeries.reduce((largest, pen) => Math.max(largest, plotTextWidth(String(pen.name ?? "Pen")) + 20), 0))
+        : 0;
+      const right = Math.max(2, width - (legendWidth ? legendWidth + 10 : 2));
+      const left = Math.min(yLabelWidth + 9 + (showYLabel ? 18 : 0), Math.max(1, right - 24));
+      const bottom = Math.max(10, height - (showXLabel ? 36 : 20));
       return {
-        left: clampNumber(16 + yLabelWidth, 28, 76),
-        top: 10,
-        right: 150,
-        bottom: 80,
-        xTickY: 93,
-        xLabelY: 110
+        width, height, legendWidth, showXLabel, showYLabel,
+        left, top: 9, right, bottom,
+        xTickY: bottom + 15,
+        xLabelY: height - 3
       };
     }
 
-    function estimateTickLabelWidth(label) {
-      return String(label ?? "").length * 4.4;
+    function plotTextWidth(text) {
+      const context = plotTextWidth.context ?? (plotTextWidth.context = document.createElement("canvas").getContext("2d"));
+      context.font = "11px " + getComputedStyle(document.body).fontFamily;
+      return context.measureText(String(text)).width;
+    }
+
+    function fitPlotText(element, width) {
+      const fullText = element.textContent;
+      if (plotTextWidth(fullText) <= width) {
+        return;
+      }
+      let label = fullText;
+      while (label && plotTextWidth(label + "…") > width) {
+        label = label.slice(0, -1);
+      }
+      element.textContent = label ? label + "…" : "";
+      const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
+      title.textContent = fullText;
+      element.append(title);
     }
 
     function axisTicks(domain) {
       const [min, max] = domain;
-      return [min, min + (max - min) / 2, max];
+      return [...new Set([min, min / 2 + max / 2, max])];
     }
 
     function scaleLinear(value, domain, outputMin, outputMax) {
@@ -6588,27 +6733,27 @@ class NetLogoModelEditorProvider {
       return outputMin + ((value - min) / range) * (outputMax - outputMin);
     }
 
-    function formatTick(value) {
+    function formatTick(value, domain) {
+      if (value === 0) {
+        return "0";
+      }
       const absolute = Math.abs(value);
-      const formatterOptions = { useGrouping: true, maximumFractionDigits: 2 };
-      if (absolute >= 1000) {
-        formatterOptions.maximumFractionDigits = 0;
-        return new Intl.NumberFormat("en-US", formatterOptions).format(value);
-      }
-      if (absolute >= 10) {
-        formatterOptions.maximumFractionDigits = 0;
-        return new Intl.NumberFormat("en-US", formatterOptions).format(value);
-      }
-      if (absolute >= 1) {
-        formatterOptions.maximumFractionDigits = 1;
-        return new Intl.NumberFormat("en-US", formatterOptions).format(value);
+      const step = domain ? Math.abs(domain[1] / 2 - domain[0] / 2) : absolute;
+      const magnitude = domain ? Math.max(Math.abs(domain[0]), Math.abs(domain[1])) : absolute;
+      const formatterOptions = { useGrouping: true, maximumFractionDigits: 0 };
+      if (absolute < 0.0001 || absolute >= 1e9) {
+        formatterOptions.notation = "scientific";
+        formatterOptions.maximumSignificantDigits = Math.min(17, Math.max(4, Math.ceil(Math.log10(magnitude / step)) + 3));
+        delete formatterOptions.maximumFractionDigits;
+      } else {
+        formatterOptions.maximumFractionDigits = Math.min(20, Math.max(0, Math.ceil(-Math.log10(step)) + 2));
       }
       return new Intl.NumberFormat("en-US", formatterOptions).format(value);
     }
 
-    function axisLabel(value, fallback) {
+    function axisLabel(value) {
       const text = String(value ?? "").trim();
-      return text && text.toUpperCase() !== "NIL" ? text : fallback;
+      return text.toUpperCase() === "NIL" ? "" : text;
     }
 
     function svgLine(x1, y1, x2, y2, className) {

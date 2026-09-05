@@ -13,7 +13,8 @@ import {
 } from "./classicInterface";
 import { getConfiguredJvmArgs, resolveNetLogoClassPath } from "./netlogoInstallation";
 import { parseNetLogoModel } from "./modelFormat";
-import { parsePlotCsv, type ParsedPlotCsv } from "./plotCsv";
+import type { ParsedPlotCsv } from "./plotCsv";
+import { parsePlotBinary } from "./plotSnapshot";
 import { parseView3DBinary } from "./view3D";
 
 export interface NetLogoRunResult {
@@ -252,11 +253,11 @@ export class NetLogoRunner implements vscode.Disposable {
           : undefined;
         const plotValues: PlotValue[] = [];
         for (const plot of runtimeState.plots) {
-          const csv = await this.tryExportPlot(session, plot);
-          if (csv !== undefined) {
+          const data = await this.tryExportPlot(session, plot);
+          if (data !== undefined) {
             plotValues.push({
               ...plot,
-              data: parsePlotCsv(csv)
+              data
             });
           }
         }
@@ -526,14 +527,14 @@ export class NetLogoRunner implements vscode.Disposable {
     }
   }
 
-  private async tryExportPlot(session: NetLogoSession, plot: PlotExporter): Promise<string | undefined> {
+  private async tryExportPlot(session: NetLogoSession, plot: PlotExporter): Promise<ParsedPlotCsv | undefined> {
     const exportDir = path.join(this.context.globalStorageUri.fsPath, "plot-exports");
     fs.mkdirSync(exportDir, { recursive: true });
-    const exportPath = path.join(exportDir, `plot-${Date.now()}-${Math.random().toString(16).slice(2)}.csv`);
+    const exportPath = path.join(exportDir, `plot-${Date.now()}-${Math.random().toString(16).slice(2)}.bin`);
 
     try {
-      const base64Csv = await session.exportPlot(plot.plotName, exportPath);
-      return Buffer.from(base64Csv, "base64").toString("utf8");
+      await session.exportPlotBinary(plot.plotName, exportPath);
+      return parsePlotBinary(await fs.promises.readFile(exportPath));
     } catch (error) {
       this.output.appendLine(`Plot export failed (${plot.plotName}): ${error instanceof Error ? error.message : String(error)}`);
       return undefined;
@@ -656,6 +657,12 @@ class NetLogoSession implements vscode.Disposable {
 
   public async exportPlot(plotName: string, filePath: string): Promise<string> {
     const next = this.commandChain.catch(() => undefined).then(() => this.exportPlotNow(plotName, filePath));
+    this.commandChain = next.then(() => undefined);
+    return next;
+  }
+
+  public async exportPlotBinary(plotName: string, filePath: string): Promise<void> {
+    const next = this.commandChain.catch(() => undefined).then(() => this.exportPlotBinaryNow(plotName, filePath));
     this.commandChain = next.then(() => undefined);
     return next;
   }
@@ -798,6 +805,23 @@ class NetLogoSession implements vscode.Disposable {
         }
       });
     }, Math.max(this.commandTimeoutMs, 5 * 60_000));
+  }
+
+  private async exportPlotBinaryNow(plotName: string, filePath: string): Promise<void> {
+    if (this.isDisposed) {
+      throw new Error("NetLogo session is already closed.");
+    }
+    await this.ready;
+    this.logVerbose(`netlogo:export-plot-binary> ${plotName}`);
+    return this.createPending<void>(`export plot ${plotName}`, () => {
+      const encodedName = Buffer.from(plotName, "utf8").toString("base64");
+      const encodedPath = Buffer.from(filePath, "utf8").toString("base64");
+      this.child.stdin.write(`EXPORT_PLOT_BINARY ${encodedName} ${encodedPath}\n`, "utf8", error => {
+        if (error) {
+          this.failPending(error);
+        }
+      });
+    });
   }
 
   private async reportDrawing3DNow(): Promise<string> {

@@ -172,6 +172,13 @@ public final class NetLogoCommandBridge {
           String path = decodePayload(parts[1]);
           byte[] bytes = exportPlot(workspace, plotName, path);
           System.out.println(PLOT + Base64.getEncoder().encodeToString(bytes));
+        } else if (line.startsWith("EXPORT_PLOT_BINARY ")) {
+          String[] parts = line.substring("EXPORT_PLOT_BINARY ".length()).split(" ", 2);
+          if (parts.length != 2) {
+            throw new IllegalArgumentException("EXPORT_PLOT_BINARY requires plot name and path payloads");
+          }
+          exportPlotBinary(workspace, decodePayload(parts[0]), decodePayload(parts[1]));
+          System.out.println(OK);
         } else if (line.startsWith("EXPORT_REPORT ")) {
           String[] parts = line.substring("EXPORT_REPORT ".length()).split(" ", 2);
           if (parts.length != 2) {
@@ -272,6 +279,70 @@ public final class NetLogoCommandBridge {
         // Export files are temporary; a failed cleanup should not hide the real result.
       }
     }
+  }
+
+  private static void exportPlotBinary(HeadlessWorkspace workspace, String plotName, String path) throws Exception {
+    org.nlogo.api.PlotInterface plot = workspace.getPlot(plotName);
+    if (plot == null) {
+      throw new IllegalArgumentException("No such plot: " + plotName);
+    }
+    org.nlogo.api.PlotState state = plot.state();
+    scala.collection.Seq<org.nlogo.api.PlotPenInterface> pens = plot.pens();
+    // NLP1 v1, big endian. Full native history is retained, including pen-up points
+    // and per-point ARGB. Reading the plot API does not execute reporters, select
+    // another plot/pen, consume RNG state, or change the simulation.
+    // The caller reads and removes this file, including after a failed export.
+    try (DataOutputStream output = new DataOutputStream(new BufferedOutputStream(Files.newOutputStream(Paths.get(path))))) {
+      output.writeInt(0x4e4c5031);
+      output.writeInt(1);
+      writePlotString(output, plot.name());
+      output.writeDouble(state.xMin());
+      output.writeDouble(state.xMax());
+      output.writeDouble(state.yMin());
+      output.writeDouble(state.yMax());
+      output.writeBoolean(state.autoPlotOn());
+      output.writeBoolean(plot.legendIsOpen());
+      String currentPen = plot.currentPenByName();
+      writePlotString(output, currentPen == null ? "" : currentPen);
+      output.writeInt(pens.size());
+      scala.collection.Iterator<org.nlogo.api.PlotPenInterface> penIterator = pens.iterator();
+      while (penIterator.hasNext()) {
+        org.nlogo.api.PlotPenInterface pen = penIterator.next();
+        org.nlogo.core.PlotPenState penState = pen.state();
+        scala.collection.Seq<org.nlogo.api.PlotPointInterface> points = pen.points();
+        writePlotString(output, pen.name());
+        output.writeBoolean(penState.isDown());
+        output.writeInt(penState.mode());
+        output.writeDouble(penState.interval());
+        output.writeInt(penState.color());
+        output.writeDouble(penState.x());
+        output.writeBoolean(penState.hidden());
+        output.writeBoolean(plotPenInLegend(pen));
+        output.writeInt(points.size());
+        scala.collection.Iterator<org.nlogo.api.PlotPointInterface> pointIterator = points.iterator();
+        while (pointIterator.hasNext()) {
+          org.nlogo.api.PlotPointInterface point = pointIterator.next();
+          output.writeDouble(point.x());
+          output.writeDouble(point.y());
+          output.writeInt(point.color());
+          output.writeBoolean(point.isDown());
+        }
+      }
+    }
+  }
+
+  private static boolean plotPenInLegend(org.nlogo.api.PlotPenInterface pen) throws Exception {
+    try {
+      // Both NetLogo 6.4 implementations expose this getter, but the shared
+      // PlotPenInterface does not. If absent, retain the pen's legend entry.
+      return (Boolean) pen.getClass().getMethod("inLegend").invoke(pen);
+    } catch (NoSuchMethodException missingLegendMetadata) {
+      return true;
+    }
+  }
+
+  private static void writePlotString(DataOutputStream output, String value) throws Exception {
+    writeView3DString(output, value);
   }
 
   private static void exportReport(HeadlessWorkspace workspace, String reporter, String path) throws Throwable {

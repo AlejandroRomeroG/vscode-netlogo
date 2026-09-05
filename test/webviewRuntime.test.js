@@ -11,8 +11,8 @@ test("webview exposes a controllable forever run loop", () => {
 
   assert.match(source, /id="foreverButton"/);
   assert.match(source, /\.actions button\s*\{[\s\S]*?display: inline-flex;[\s\S]*?align-items: center;[\s\S]*?justify-content: center;[\s\S]*?height: 28px;[\s\S]*?padding-top: 0;[\s\S]*?padding-bottom: 0;/);
-  assert.match(source, /\.status\s*\{[\s\S]*?display: inline-flex;[\s\S]*?width: 35ch;[\s\S]*?min-width: 35ch;[\s\S]*?min-height: 28px;[\s\S]*?overflow-x: auto;[\s\S]*?overflow-y: hidden;[\s\S]*?border: 1px solid var\(--vscode-input-border, var\(--vscode-panel-border\)\);[\s\S]*?background: var\(--vscode-editorWidget-background\);[\s\S]*?scrollbar-width: thin;/);
-  assert.match(source, /\.status::-webkit-scrollbar\s*\{[\s\S]*?height: 4px;/);
+  assert.doesNotMatch(source, /id="status"|\.status\s*\{/);
+  assert.match(source, /vscode\.postMessage\(\{ type: "editor-status", message \}\)/);
   assert.match(source, /\.run-controls\s*\{[\s\S]*?display: inline-flex;[\s\S]*?align-items: center;[\s\S]*?gap: 6px;/);
   assert.match(source, /#foreverButton\s*\{[\s\S]*?width: 68px;[\s\S]*?min-width: 68px;/);
   assert.match(source, /\.topbar\s*\{[^}]*height: 42px;[^}]*max-height: 42px;/);
@@ -32,9 +32,8 @@ test("webview exposes a controllable forever run loop", () => {
   assert.match(source, /foreverButton\.textContent = running \? "Stop" : "Forever"/);
   assert.match(source, /foreverButton\.classList\.toggle\("running", running\)/);
   const topbarActions = source.match(/<div class="actions">[\s\S]*?<\/div>\s*<\/header>/)?.[0] ?? "";
-  assert.ok(topbarActions.indexOf('id="status"') >= 0);
+  assert.equal(topbarActions.indexOf('id="status"'), -1);
   assert.ok(topbarActions.indexOf('id="commandButton"') >= 0);
-  assert.ok(topbarActions.indexOf('id="commandButton"') > topbarActions.indexOf('id="status"'));
   assert.ok(topbarActions.indexOf('id="openNativeButton"') > topbarActions.indexOf('id="commandButton"'));
   assert.ok(topbarActions.indexOf('id="speedSlider"') > topbarActions.indexOf('id="openNativeButton"'));
   assert.ok(topbarActions.indexOf('id="tickCount"') > topbarActions.indexOf('id="speedSlider"'));
@@ -131,7 +130,7 @@ test("Interface layout clamps slider widgets to a usable minimum height", () => 
 
   assert.match(source, /function normalizeBounds\(bounds, kind\)/);
   assert.match(source, /function widgetMinimumSize\(kind\)/);
-  assert.match(source, /slider: \{ width: 90, height: 34 \}/);
+  assert.match(source, /slider: \{ width: 90, height: 35 \}/);
   assert.match(source, /height: Math\.max\(minimum\.height, Math\.round\(bounds\.height\)\)/);
   assert.match(source, /normalizeBounds\(\{[\s\S]*?height: interaction\.startHeight \+ dy[\s\S]*?\}, widget\.kind\)/);
   assert.match(source, /pendingBounds: null/);
@@ -254,7 +253,7 @@ test("runner reports incompatible model formats with a concise message", () => {
   assert.match(runnerSource, /const message = formatNetLogoErrorMessage\(error\)/);
   assert.match(editorSource, /message: formatNetLogoErrorMessage\(error\)/);
   assert.match(editorSource, /setStatus\(displayMessage\)/);
-  assert.match(editorSource, /status\.title = message/);
+  assert.match(editorSource, /this\.output\.appendLine\(/);
 });
 
 test("webview allows exported view images and hides raw Interface source by default", () => {
@@ -506,13 +505,14 @@ test("vendored Three.js module dependencies are packaged", () => {
   }
 });
 
-test("runner parses complete NetLogo export-plot CSV data before posting it to the webview", () => {
+test("runner reads complete native binary plots before posting them to the webview", () => {
   const runnerSource = fs.readFileSync(path.join(root, "src", "runner.ts"), "utf8");
   const webviewSource = fs.readFileSync(path.join(root, "src", "netlogoEditor.ts"), "utf8");
 
-  assert.match(runnerSource, /import \{ parsePlotCsv, type ParsedPlotCsv \} from "\.\/plotCsv"/);
+  assert.match(runnerSource, /import \{ parsePlotBinary \} from "\.\/plotSnapshot"/);
   assert.match(runnerSource, /readonly data: ParsedPlotCsv/);
-  assert.match(runnerSource, /data: parsePlotCsv\(csv\)/);
+  assert.match(runnerSource, /await session\.exportPlotBinary\(plot\.plotName, exportPath\)/);
+  assert.match(runnerSource, /parsePlotBinary\(await fs\.promises\.readFile\(exportPath\)\)/);
   assert.match(webviewSource, /state\.plotData\[plot\.widgetId\] = plot\.data \?\? null/);
   assert.match(webviewSource, /function plotSeriesForWidget\(widget, runtimePlot, configurationDirty\)/);
   assert.match(webviewSource, /for \(const pen of series\) \{\s*renderPlotSeries/);
@@ -528,8 +528,10 @@ test("webview renders plot pen colors, modes, legends, and exposes the full pen 
   assert.match(source, /point\.x \+ interval/);
   assert.match(source, /Math\.abs\(barEndX - normalized\[0\]\)/);
   assert.match(source, /function svgPlotPoint\(x, y, fill\)/);
-  assert.match(source, /plotCssColor\(point\.color \?\? fallbackColor\)/);
-  assert.match(source, /function renderPlotLegend\(svg, series\)/);
+  assert.match(source, /point\.color \?\? fallbackColor,/);
+  assert.match(source, /pen\.pointColorFormat \?\? pen\.colorFormat/);
+  assert.match(source, /format === "argb"/);
+  assert.match(source, /function renderPlotLegend\(body, series, width\)/);
   assert.match(source, /runtimePlot\?\.legend/);
   assert.match(source, /pen\.inLegend !== false/);
   assert.match(source, /function renderPlotPensEditor\(widget\)/);
@@ -565,8 +567,8 @@ test("webview plots include axes ticks and axis titles", () => {
   assert.match(source, /function axisTicks\(domain\)/);
   assert.match(source, /plot-tick-label/);
   assert.match(source, /plot-axis-label/);
-  assert.match(source, /axisLabel\(widget\.details\?\.xAxis, "x"\)/);
-  assert.match(source, /axisLabel\(widget\.details\?\.yAxis, "y"\)/);
+  assert.match(source, /axisLabel\(widget\.details\?\.xAxis\)/);
+  assert.match(source, /axisLabel\(widget\.details\?\.yAxis\)/);
 });
 
 test("webview plot domains honor exact runtime ranges and expand configured fallbacks", () => {
@@ -591,12 +593,12 @@ test("webview plot domains honor exact runtime ranges and expand configured fall
 test("webview plot ticks use grouped labels and dynamic margins", () => {
   const source = fs.readFileSync(path.join(root, "src", "netlogoEditor.ts"), "utf8");
 
-  assert.match(source, /function plotFrameForDomains\(xDomain, yDomain\)/);
-  assert.match(source, /estimateTickLabelWidth\(formatTick\(tick\)\)/);
-  assert.match(source, /left: clampNumber\(16 \+ yLabelWidth, 28, 76\)/);
-  assert.match(source, /bottom: 80/);
-  assert.match(source, /xTickY: 93/);
-  assert.match(source, /xLabelY: 110/);
+  assert.match(source, /function plotFrameForDomains\(xDomain, yDomain, widget, legendSeries\)/);
+  assert.match(source, /plotTextWidth\(formatTick\(tick, yDomain\)\)/);
+  assert.match(source, /width = Math\.max\(1, widget\.width - 18\)/);
+  assert.match(source, /height = Math\.max\(1, widget\.height - 40\)/);
+  assert.match(source, /xTickY: bottom \+ 15/);
+  assert.match(source, /xLabelY: height - 3/);
   assert.match(source, /frame\.xTickY/);
   assert.match(source, /frame\.xLabelY/);
   assert.match(source, /new Intl\.NumberFormat\("en-US", formatterOptions\)\.format\(value\)/);

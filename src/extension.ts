@@ -15,6 +15,10 @@ import { NativeNetLogoLauncher } from "./nativeNetLogo";
 export function activate(context: vscode.ExtensionContext): void {
   const output = vscode.window.createOutputChannel("NetLogo");
   const runner = new NetLogoRunner(context, output);
+  const nativeNetLogoLauncher = new NativeNetLogoLauncher({
+    read: () => context.globalState.get("netlogo.nativeSessions.v1"),
+    write: async records => { await context.globalState.update("netlogo.nativeSessions.v1", records); }
+  });
   const diagnostics = vscode.languages.createDiagnosticCollection("netlogo");
 
   context.subscriptions.push(
@@ -54,7 +58,7 @@ export function activate(context: vscode.ExtensionContext): void {
       createNetLogoCodeActionProvider(),
       { providedCodeActionKinds: [vscode.CodeActionKind.QuickFix] }
     ),
-    NetLogoModelEditorProvider.register(context, runner),
+    NetLogoModelEditorProvider.register(context, runner, output),
     vscode.workspace.onDidOpenTextDocument(document => updateNetLogoDiagnostics(document, diagnostics)),
     vscode.workspace.onDidChangeTextDocument(event => updateNetLogoDiagnostics(event.document, diagnostics)),
     vscode.workspace.onDidCloseTextDocument(document => diagnostics.delete(document.uri)),
@@ -67,7 +71,7 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
     vscode.commands.registerCommand("netlogo.openInNetLogo", async (resource?: vscode.Uri) => {
       try {
-        return await openInNativeNetLogo(resource);
+        return await openInNativeNetLogo(nativeNetLogoLauncher, resource, output);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         output.appendLine(`Native NetLogo launch failed: ${message}`);
@@ -697,9 +701,7 @@ function stripInlineComment(line: string): string {
   return line;
 }
 
-const nativeNetLogoLauncher = new NativeNetLogoLauncher();
-
-async function openInNativeNetLogo(resource?: vscode.Uri): Promise<boolean> {
+async function openInNativeNetLogo(nativeNetLogoLauncher: NativeNetLogoLauncher, resource?: vscode.Uri, output?: vscode.OutputChannel): Promise<boolean> {
   const uri = await resolveModelUri(resource);
   if (!uri) {
     return false;
@@ -716,16 +718,40 @@ async function openInNativeNetLogo(resource?: vscode.Uri): Promise<boolean> {
 
   const appPath = process.platform === "darwin" ? nativeNetLogoAppForResource(uri) : undefined;
   if (!appPath) {
+    if (process.platform === "darwin") {
+      throw new Error("No native NetLogo application was found. Use NetLogo: Configure NetLogo before opening this model.");
+    }
     if (!await vscode.env.openExternal(uri)) {
       throw new Error("No native application could open this model. Check your NetLogo installation.");
     }
     return true;
   }
 
-  await vscode.window.withProgress({
+  const result = await vscode.window.withProgress({
     location: vscode.ProgressLocation.Notification,
-    title: `Starting NetLogo: ${path.basename(uri.fsPath)} (native startup may take a few seconds)`
+    title: `Opening NetLogo: ${path.basename(uri.fsPath)} (checking saved sessions)`
   }, () => nativeNetLogoLauncher.openMacModel(appPath, uri.fsPath));
+  if (result.action === "untracked") {
+    output?.appendLine(`[${path.basename(uri.fsPath)}] Unregistered native NetLogo session detected; no new copy opened.`);
+    const choice = await vscode.window.showInformationMessage(
+      "NetLogo is already running in a session not registered by this extension. Its current model is unknown. " +
+      "You can go to NetLogo without opening another copy.", "Go to NetLogo");
+    if (choice !== "Go to NetLogo") return false;
+    const instance = result.instances.length === 1 ? result.instances[0] : (await vscode.window.showQuickPick(
+      result.instances.map(value => ({
+        label: `${path.basename(value.appPath, ".app")} · PID ${value.pid}`,
+        description: `Started ${new Date(value.startedAt * 1000).toLocaleString()}`,
+        detail: value.appPath,
+        instance: value
+      })), { title: "Go to NetLogo", placeHolder: "Choose an existing session (current model unknown)" }))?.instance;
+    if (!instance) return false;
+    await nativeNetLogoLauncher.activateExisting(instance);
+    output?.appendLine(`[${path.basename(uri.fsPath)}] Activated an existing NetLogo session (current model not verified); no new copy opened.`);
+    return true;
+  }
+  output?.appendLine(`[${path.basename(uri.fsPath)}] ${result.action === "activated"
+    ? "Activated the NetLogo session previously opened for this file; no new copy opened."
+    : "Started a native NetLogo instance; the model may still be loading."}`);
   return true;
 }
 
