@@ -37,6 +37,7 @@ exports.NetLogoModelEditorProvider = void 0;
 const path = __importStar(require("path"));
 const vscode = __importStar(require("vscode"));
 const chooserValues_1 = require("./chooserValues");
+const view2D_1 = require("./view2D");
 const infoResources_1 = require("./infoResources");
 const commandPrompt_1 = require("./commandPrompt");
 const classicInterface_1 = require("./classicInterface");
@@ -1150,7 +1151,18 @@ class NetLogoModelEditorProvider {
       background-color: var(--vscode-editorWidget-background);
     }
 
+    .two-view {
+      position: relative;
+      min-width: 0;
+      min-height: 0;
+      overflow: hidden;
+      background: var(--vscode-editorWidget-background);
+    }
+
     .view-image {
+      display: block;
+      position: absolute;
+      inset: 0;
       width: 100%;
       height: 100%;
       min-height: 0;
@@ -1906,6 +1918,7 @@ class NetLogoModelEditorProvider {
   <script nonce="${nonce}" src="${infoMarkdownUri}"></script>
   <script nonce="${nonce}">
     const chooserCodec = (${chooserValues_1.createChooserCodec.toString()})();
+    const createTwoViewFrameQueue = ${view2D_1.createTwoViewFrameQueue.toString()};
     const vscode = acquireVsCodeApi();
     const restoredUiState = vscode.getState?.() ?? {};
     const knownWidgetTypes = new Set([
@@ -2055,6 +2068,7 @@ class NetLogoModelEditorProvider {
       runtimeValues: {},
       viewImageDataUri: null,
       view3DState: null,
+      twoViewControllers: new Map(),
       threeViewDisposers: [],
       threeTrailState: null,
       threeObserverCameraKey: null,
@@ -3343,6 +3357,7 @@ class NetLogoModelEditorProvider {
 
       state.pendingInterfaceRender = false;
       const widgets = state.interfacePreview.widgets ?? [];
+      pruneTwoViews(widgets);
       disposeThreeViews();
       surface.replaceChildren();
       surface.classList.toggle("interact-mode", state.interfaceMode === "interact");
@@ -3424,6 +3439,17 @@ class NetLogoModelEditorProvider {
       return refreshed;
     }
 
+    function pruneTwoViews(widgets) {
+      const keep = new Set(state.viewImageDataUri && !state.view3DState
+        ? widgets.filter(widget => widget.kind === "view").map(widget => widget.id) : []);
+      for (const [id, controller] of state.twoViewControllers) {
+        if (!keep.has(id)) {
+          controller.dispose();
+          state.twoViewControllers.delete(id);
+        }
+      }
+    }
+
     function refreshMountedTwoViews() {
       if (!state.viewImageDataUri || state.view3DState || state.interaction) {
         return false;
@@ -3436,18 +3462,17 @@ class NetLogoModelEditorProvider {
       }
 
       const expected = new Set(views.map(widget => widget.id));
-      const images = [];
+      const controllers = [];
       for (const element of mounted) {
-        const image = element.querySelector(".view-image");
-        if (!image || !expected.delete(element.dataset.widgetId)) {
+        const controller = state.twoViewControllers.get(element.dataset.widgetId);
+        if (!controller || element.querySelector(".two-view") !== controller.host
+          || !expected.delete(element.dataset.widgetId)) {
           return false;
         }
-        images.push(image);
+        controllers.push(controller);
       }
-      for (const image of images) {
-        if (image.src !== state.viewImageDataUri) {
-          image.src = state.viewImageDataUri;
-        }
+      for (const controller of controllers) {
+        controller.update(state.viewImageDataUri);
       }
       return true;
     }
@@ -4379,7 +4404,7 @@ class NetLogoModelEditorProvider {
         case "view":
           return fragment([
             node("div", "view-title", widget.label),
-            renderViewBody(),
+            renderViewBody(widget),
             node("div", "view-footer", viewWorldLabel(widget))
           ]);
         case "button":
@@ -4429,7 +4454,7 @@ class NetLogoModelEditorProvider {
       }
     }
 
-    function renderViewBody() {
+    function renderViewBody(widget) {
       if (state.view3DState) {
         return node("div", "three-view", [
           node("div", "three-status", "3D")
@@ -4437,11 +4462,31 @@ class NetLogoModelEditorProvider {
       }
 
       if (state.viewImageDataUri) {
-        const image = node("img", "view-image", "");
-        image.decoding = "async";
-        image.src = state.viewImageDataUri;
-        image.alt = "NetLogo view";
-        return image;
+        let controller = state.twoViewControllers.get(widget.id);
+        if (!controller) {
+          const host = node("div", "two-view", "");
+          controller = {
+            host,
+            ...createTwoViewFrameQueue({
+              createImage: () => {
+                const image = node("img", "view-image", "");
+                image.decoding = "async";
+                image.alt = "NetLogo view";
+                return image;
+              },
+              present: image => host.replaceChildren(image),
+              onError: error => {
+                console.error("NetLogo 2D image decode failed", error);
+                setStatus(host.querySelector(".view-image")
+                  ? "2D view could not be decoded; keeping the previous frame."
+                  : "2D view could not be decoded.");
+              }
+            })
+          };
+          state.twoViewControllers.set(widget.id, controller);
+        }
+        controller.update(state.viewImageDataUri);
+        return controller.host;
       }
 
       return node("div", "view-grid", "");

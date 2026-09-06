@@ -132,7 +132,8 @@ See [Info rendering and validation](docs/info-rendering.md) for checked model ex
 ### 2D viewer and long runs
 
 - Keeps NetLogo's native 2D rendering, turtle shapes, colors, and transparency; the extension displays its PNG without recoloring it.
-- Updates the existing image, monitors, and plots between commands without rebuilding the controls or Properties panel on every frame. Layout changes and the first view still trigger a complete render.
+- Decodes each 2D PNG off-screen and replaces the visible image only when it is ready, preventing black flashes between updates. One active decode and one latest pending request keep presentation work bounded without changing model execution or plot history.
+- Reuses the 2D view container across updates and Layout changes; monitors and plots refresh without rebuilding controls or Properties on every frame. A failed image decode is reported while the previous good frame remains visible.
 - Reads plot histories directly through the native plot API instead of converting the full history to CSV and back each frame. Every point remains available, including after pen resets, histogram replacement, and changes to temporary pens.
 - Builds each continuous SVG line segment once, avoiding the repeated parsing of growing path prefixes that slowed long-running models. Native pen visibility and legend settings are retained.
 

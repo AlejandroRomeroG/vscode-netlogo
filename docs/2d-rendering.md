@@ -9,7 +9,19 @@ Two history-dependent costs were reproduced with Wolf Sheep Simple 5:
 1. The SVG renderer assigned the complete growing `d` attribute again for every point. A single 5,000-point line submitted 194,431,395 characters across 4,999 assignments, although its final path contained only 78,084 characters. Each continuous color/pen-down segment is now assembled and submitted once. Coordinates, ordering, color changes, and pen-up gaps are unchanged; no downsampling is applied.
 2. Each frame exported all plots as native CSV, encoded that text in base64, and parsed it back into objects. The runtime now reads complete binary snapshots directly from the native plot API, avoiding the wide CSV table, numeric text formatting, and base64 transport. CSV export remains available for comparison and regression tests.
 
-The mounted 2D image is also reused between frames. Unchanged image sources are not reassigned, and plots and monitors refresh without replacing controls or rebuilding Properties. Initial setup, changes to view widgets, failed exports, and active layout dragging retain the full-render fallback. The existing 3D update path is preserved.
+The mounted 2D view container is reused between frames and across Interface rebuilds. Plots and monitors refresh without replacing controls or rebuilding Properties. Initial setup, changes to view widgets, failed exports, and active layout dragging retain the full-render fallback. The existing 3D update path is preserved.
+
+### Black flashes between frames
+
+Hotelling's Law exposed a separate presentation bug: assigning a new PNG URL directly to the visible image with `decoding="async"` let Chromium paint an empty image while decoding. The native PNGs were not black. A replay of 90 native frames (seed 24680, five stores, `normal`, `plane`) reproduced completely black browser captures between updates.
+
+The presenter now decodes an off-screen image and swaps **that same decoded element** into the existing view container. It does not assign the URL to a second, undecoded visible element or blend/recolor the PNG. The previous good frame remains visible until the replacement is ready. The container survives Layout/Interact changes; removed views, failed exports, and switching to 3D dispose their pending work so a late decode cannot restore an obsolete view.
+
+The queue holds one active decode and one newest requested source. When rendering falls behind incoming results, intermediate presentation requests are superseded rather than queued indefinitely; the model still executes every requested step, and complete plot histories remain unchanged. Each completed decode can be presented before preparing the newest request, avoiding starvation under continuous updates. Duplicate frames do not restart decoding. Decode failures are reported to Output and preserve the last good image.
+
+In an isolated Edge headless replay at 33ms delivery intervals, the previous presenter produced 88 black captures and the updated presenter produced **zero**. With 4× CPU throttling, the comparison was 86 versus **zero**. Each replay used the same 90 PNGs, waited for the initial frame to paint, and captured subsequent browser-composited frames. Separate browser contexts avoided cross-renderer decoded-image cache reuse. These are frame-presentation checks, not an end-to-end simulation FPS benchmark.
+
+`node scripts/preview2DFrames.js --hotelling` captures the same native sequence in an independent headless workspace, verifies the model file remains unchanged, cleans temporary exports, and serves a loopback comparison using the generated production renderer. The comparison isolates image-cache keys without changing PNG bytes. Omit `--hotelling` to use synthetic PNGs, or supply a JSON array of PNG data URIs. An optional second argument selects the baseline Git revision (default `4f83da8`). Stop the server after inspection; no additional VS Code or native NetLogo GUI instance is opened.
 
 ### Native plot snapshots
 
@@ -52,7 +64,8 @@ In Interact, Properties displays **Switch to Layout to edit widget properties.**
 
 ```bash
 npm run compile
-node --test test/plotSnapshot.test.js test/plotSnapshot.integration.test.js test/view2D.integration.test.js test/view2DRuntime.test.js test/plotRenderingPerformance.test.js
+node --test test/plotSnapshot.test.js test/plotSnapshot.integration.test.js test/view2D.test.js test/view2D.integration.test.js test/view2DRuntime.test.js test/plotRenderingPerformance.test.js
+node scripts/preview2DFrames.js --hotelling
 node scripts/benchmark2D.js
 node scripts/previewPlotPerformance.js
 ```
