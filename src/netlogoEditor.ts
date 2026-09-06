@@ -1,5 +1,6 @@
 import * as path from "path";
 import * as vscode from "vscode";
+import { createChooserCodec } from "./chooserValues";
 import { externalInfoUrl, loadInfoLocalImage, resolveInfoLocalFile } from "./infoResources";
 import { promptForNetLogoCommand, rememberNetLogoCommand } from "./commandPrompt";
 import {
@@ -451,7 +452,7 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
     const edit = new vscode.WorkspaceEdit();
     edit.replace(document.uri, new vscode.Range(0, 0, document.lineCount, 0), replacement);
     const applied = await vscode.workspace.applyEdit(edit);
-    if (applied && widget?.kind === "plot") {
+    if (applied && (widget?.kind === "plot" || widget?.kind === "chooser" && ("choices" in updates || "variable" in updates))) {
       this.runner.invalidate(document.uri);
     }
   }
@@ -2043,6 +2044,7 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
   <script nonce="${nonce}" src="${markdownUri}"></script>
   <script nonce="${nonce}" src="${infoMarkdownUri}"></script>
   <script nonce="${nonce}">
+    const chooserCodec = (${createChooserCodec.toString()})();
     const vscode = acquireVsCodeApi();
     const restoredUiState = vscode.getState?.() ?? {};
     const knownWidgetTypes = new Set([
@@ -4061,8 +4063,25 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
         input.type = descriptor.type === "number" ? "number" : "text";
       }
       input.value = formatPropertyValue(descriptor);
+      if (descriptor.key === "choices") {
+        input.title = 'NetLogo values, separated by spaces or lines. Quote text: "normal" "slow mode". Numbers, booleans and lists keep their types.';
+        input.setCustomValidity(String(widget.details?.choicesError ?? ""));
+        input.addEventListener("input", () => input.setCustomValidity(""));
+      }
       input.addEventListener("change", () => {
-        commitWidgetProperties(widget, descriptor.key, readPropertyValue(input, descriptor));
+        let value;
+        if (descriptor.key === "choices") {
+          try {
+            value = readPropertyValue(input, descriptor);
+            if (value.length === 0) throw new Error("A chooser needs at least one choice.");
+          } catch (error) {
+            input.setCustomValidity(error.message);
+            input.reportValidity();
+            return;
+          }
+          input.setCustomValidity("");
+        } else value = readPropertyValue(input, descriptor);
+        commitWidgetProperties(widget, descriptor.key, value);
       });
       label.append(labelText, input);
       return label;
@@ -4075,12 +4094,24 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
         state.runtimeStatus = "reload-needed";
         updateRuntimeBanner();
       }
+      const updates = { [key]: value };
+      if (widget.kind === "chooser" && (key === "choices" || key === "variable")) {
+        stopRunLoop();
+        state.runtimeStatus = "reload-needed";
+        updateRuntimeBanner();
+        if (key === "choices") {
+          updates.selectedIndex = chooserCodec.selectionAfterEdit(widget.details?.choices ?? [], Number(widget.details?.selectedIndex), value);
+          updateWidgetPropertyInState(widget, "selectedIndex", updates.selectedIndex);
+          delete widget.details.choicesError;
+          delete widget.details.choicesSource;
+        }
+      }
       updateWidgetPropertyInState(widget, key, value);
       setStatus(widget.kind === "plot" ? "Plot changed · run Setup" : "Editing");
       vscode.postMessage({
         type: "update-properties",
         widgetId: widget.id,
-        updates: { [key]: value }
+        updates
       });
       renderInterface();
     }
@@ -4119,7 +4150,7 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
           return [
             descriptor("label", "Label", widget.label),
             descriptor("variable", "Variable", details.variable),
-            descriptor("choices", "Choices", details.choices, "text", true),
+            descriptor("choices", "Choices", details.choicesError ? details.choicesSource : details.choices, "text", true),
             descriptor("selectedIndex", "Selected", details.selectedIndex, "number")
           ];
         case "monitor":
@@ -4368,6 +4399,9 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
     }
 
     function formatPropertyValue(descriptor) {
+      if (descriptor.key === "choices" && Array.isArray(descriptor.value)) {
+        return chooserCodec.format(descriptor.value, "\\n");
+      }
       if (Array.isArray(descriptor.value)) {
         return descriptor.value.join("\\n");
       }
@@ -4400,18 +4434,7 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
     }
 
     function parseChoices(value) {
-      const lines = value.split(/\\r?\\n/).map(line => line.trim()).filter(Boolean);
-      if (lines.length > 1) {
-        return lines;
-      }
-
-      const tokens = [];
-      const expression = /"([^"]*)"|(\\S+)/g;
-      let match;
-      while ((match = expression.exec(value)) !== null) {
-        tokens.push(match[1] ?? match[2] ?? "");
-      }
-      return tokens;
+      return chooserCodec.parse(value);
     }
 
     function nextWidgetBounds(kind) {
@@ -6885,17 +6908,18 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
 
     function renderRuntimeChooser(widget) {
       const select = node("select", "runtime-select", "");
-      select.disabled = state.interfaceMode === "layout";
+      select.disabled = state.interfaceMode === "layout" || Boolean(widget.details?.choicesError);
+      select.title = String(widget.details?.choicesError ?? "");
       const choices = Array.isArray(widget.details?.choices) ? widget.details.choices : [];
       const selectedIndex = Number(widget.details?.selectedIndex ?? 0);
       choices.forEach((choice, index) => {
-        const option = node("option", "", choice);
+        const option = node("option", "", chooserCodec.display(choice));
         option.value = String(index);
         option.selected = index === selectedIndex;
         select.append(option);
       });
       if (choices.length === 0) {
-        select.append(node("option", "", ""));
+        select.append(node("option", "", widget.details?.choicesError ? "Invalid choices" : ""));
       }
       wireRuntimeControl(select);
       select.addEventListener("change", () => {
@@ -6995,9 +7019,9 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
       const choices = widget.details?.choices;
       const selectedIndex = widget.details?.selectedIndex;
       if (Array.isArray(choices) && typeof selectedIndex === "number" && choices[selectedIndex] !== undefined) {
-        return choices[selectedIndex];
+        return chooserCodec.display(choices[selectedIndex]);
       }
-      return Array.isArray(choices) ? choices.join(", ") : "";
+      return Array.isArray(choices) ? choices.map(chooserCodec.display).join(", ") : "";
     }
 
     function sliderPercent(widget) {

@@ -1,10 +1,8 @@
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
-const path = require("node:path");
 const test = require("node:test");
 const { sliderLayoutSource, chooserFixtures } = require("./helpers/sliderLayout");
-const { parseNetLogoModel } = require("../out/modelFormat");
 const { parseInterfacePreview } = require("../out/classicInterface");
+const codec = require("../out/chooserValues").createChooserCodec();
 
 class Element {
   constructor(tagName) { this.tagName = tagName; this.children = []; this.style = {}; this.events = {}; }
@@ -54,7 +52,7 @@ test("chooser title, selected option, changes and Layout disabling remain intact
     assert.equal(select.disabled, false);
     assert.equal(select.children.length, Math.max(1, widget.details.choices.length));
     for (const [index, option] of select.children.entries()) {
-      assert.equal(option.textContent, widget.details.choices[index] ?? "");
+      assert.equal(option.textContent, codec.display(widget.details.choices[index] ?? ""));
       if (widget.details.choices.length) assert.equal(option.selected, index === widget.details.selectedIndex);
     }
     select.value = "1";
@@ -64,12 +62,14 @@ test("chooser title, selected option, changes and Layout disabling remain intact
   }
 });
 
-const spread = path.join(process.env.NETLOGO_HOME || "/Applications/NetLogo 6.4.0", "models/IABM Textbook/chapter 6/Spread of Disease.nlogo");
-test("Spread of Disease imports variant and network into an unchanged 45px chooser", { skip: !fs.existsSync(spread) }, () => {
-  const model = parseNetLogoModel(fs.readFileSync(spread, "utf8"), spread);
-  const widget = parseInterfacePreview(model.interfaceSource, model.format).widgets.find(item => item.kind === "chooser");
+test("Spread of Disease chooser fixture preserves its title, options and 45px geometry", () => {
+  // The user's model-library copy is editable; a saved selection must not change
+  // this geometry regression's expected value.
+  const source = ['CHOOSER', '10', '10', '180', '55', 'variant', 'variant', '"mobile" "network" "environmental"', '1'].join('\n');
+  const widget = parseInterfacePreview(source, "classic").widgets[0];
   assert.equal(widget.height, 45);
   const [heading, select] = renderer("interact").renderWidgetContent(widget).children;
   assert.equal(heading.textContent, "variant");
+  assert.deepEqual(select.children.map(option => option.textContent), ["mobile", "network", "environmental"]);
   assert.equal(select.children.find(option => option.selected).textContent, "network");
 });

@@ -13,6 +13,7 @@ function sliderLayoutSource() {
     boundsSource: fragment("function nextWidgetBounds(", "function findWidget(") +
       fragment("function normalizeBounds(", "function renderWidgetContent("),
     source: [
+      fragment("const chooserCodec =", "const vscode ="),
       fragment("function renderWidgetContent(", "function renderViewBody("),
       fragment("function renderRuntimeSlider(", "function wireRuntimeControl("),
       fragment("function wireRuntimeControl(", "function monitorValueElement("),
@@ -57,7 +58,8 @@ function chooserFixtures() {
     { label: "exact minimum", width: 180, height: 44, choices: ["first", "second"], selectedIndex: 1 },
     { label: "long-chooser-title-that-keeps-one-line", width: 100, height: 44, choices: ["a very long selected option"], selectedIndex: 0 },
     { label: "tall chooser", width: 180, height: 65, choices: ["first", "second"], selectedIndex: 1 },
-    { label: "empty chooser", width: 100, height: 44, choices: [], selectedIndex: 0 }
+    { label: "empty chooser", width: 100, height: 44, choices: [], selectedIndex: 0 },
+    { label: "mixed values", width: 170, height: 45, choices: ["normal", 'a "quote"', "1", 1, true, [1, "one"]], selectedIndex: 5 }
   ].map((fixture, index) => ({
     id: `chooser-${index}`, kind: "chooser", type: "CHOOSER", label: fixture.label,
     x: 10, y: 10 + index * 70, width: fixture.width, height: fixture.height,

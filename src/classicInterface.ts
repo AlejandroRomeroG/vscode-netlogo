@@ -1,4 +1,7 @@
 import type { NetLogoFormat } from "./modelFormat";
+import { createChooserCodec, type ChooserValue } from "./chooserValues";
+
+const chooserCodec = createChooserCodec();
 
 export interface InterfacePreview {
   readonly widgets: readonly InterfaceWidget[];
@@ -20,7 +23,7 @@ export interface PlotPen {
   readonly updateCode: string;
 }
 
-export type WidgetPropertyValue = string | number | boolean | readonly string[] | readonly PlotPen[];
+export type WidgetPropertyValue = ChooserValue | readonly PlotPen[];
 
 export interface InterfaceWidget {
   readonly id: string;
@@ -119,6 +122,19 @@ export function updateInterfaceWidgetProperties(
   widgetId: string,
   updates: WidgetPropertyUpdates
 ): string {
+  if (updates.choices !== undefined) {
+    if (!chooserCodec.isChoices(updates.choices) || updates.choices.length === 0) {
+      throw new Error("A chooser needs at least one valid choice.");
+    }
+    const widget = parseInterfacePreview(source, format).widgets.find(candidate => candidate.id === widgetId);
+    if (widget?.kind === "chooser") {
+      const previous = chooserCodec.isChoices(widget.details?.choices) ? widget.details.choices : [];
+      updates = { ...updates, selectedIndex: chooserCodec.selectionAfterEdit(previous, Number(widget.details?.selectedIndex), updates.choices) };
+      if (!widget.details?.choicesError && chooserCodec.format(previous) === chooserCodec.format(updates.choices as readonly ChooserValue[])) {
+        delete updates.choices;
+      }
+    }
+  }
   return format === "xml"
     ? updateXmlWidgetProperties(source, widgetId, updates)
     : updateClassicWidgetProperties(source, widgetId, updates);
@@ -339,7 +355,8 @@ function createClassicWidget(source: string, kind: AddableWidgetKind, bounds: Wi
     return block;
   }
 
-  return `${source}${source.endsWith("\n") ? "" : lineEnding}${block}`;
+  const separator = source.endsWith(lineEnding + lineEnding) ? "" : source.endsWith(lineEnding) ? lineEnding : lineEnding + lineEnding;
+  return `${source}${separator}${block}`;
 }
 
 function deleteClassicWidget(source: string, widgetId: string): string {
@@ -424,7 +441,7 @@ function parseClassicWidgetBlock(block: readonly string[], index: number): Inter
         ...baseWidget(index, type, "chooser", stringAt(block, 5) || stringAt(block, 6) || "Chooser", box, block),
         details: compactDetails({
           variable: stringAt(block, 6),
-          choices: parseLogoList(stringAt(block, 7)),
+          ...readChooserDetails(() => chooserCodec.parse(block[7] ?? ""), block[7] ?? ""),
           selectedIndex: numberAt(block, 8)
         })
       };
@@ -859,6 +876,14 @@ function updateXmlElementProperties(element: XmlWidgetElement, updates: WidgetPr
   let needsChildren = false;
 
   for (const [property, value] of Object.entries(updates)) {
+    if (element.tagName === "chooser" && property === "choices" && chooserCodec.isChoices(value)) {
+      if ("choices" in element.attrs) openingTag = writeXmlAttr(openingTag, "choices", chooserCodec.format(value));
+      else {
+        inner = writeXmlChooserChoices(inner, value, xmlChildIndent(element));
+        needsChildren = true;
+      }
+      continue;
+    }
     if (element.tagName === "plot" && property === "autoplot" && typeof value === "boolean") {
       openingTag = writeXmlAttr(openingTag, xmlExistingAttrName(element.attrs, ["autoPlotX", "auto-plot-x"]) ?? "autoPlotX", String(value));
       openingTag = writeXmlAttr(openingTag, xmlExistingAttrName(element.attrs, ["autoPlotY", "auto-plot-y"]) ?? "autoPlotY", String(value));
@@ -1015,7 +1040,7 @@ function writeXmlAttr(tag: string, name: string, value: string | number): string
   const escapedValue = encodeXmlAttribute(String(value));
   const expression = new RegExp(`(\\s${escapeRegExp(name)}\\s*=\\s*)(["'])(.*?)\\2`, "i");
   if (expression.test(tag)) {
-    return tag.replace(expression, `$1$2${escapedValue}$2`);
+    return tag.replace(expression, (_match, prefix: string, quote: string) => `${prefix}${quote}${escapedValue}${quote}`);
   }
 
   const insertAt = tag.endsWith("/>") ? tag.length - 2 : tag.length - 1;
@@ -1083,11 +1108,10 @@ function normalizeXmlDetails(element: XmlWidgetElement, elementText?: string): R
   }
 
   if (kind === "chooser") {
-    const choices = parseLogoList(attrs.choices);
-    if (choices) {
-      details.choices = choices;
-    }
-    details.selectedIndex = parseMaybeNumber(attrs.selectedIndex ?? attrs["selected-index"] ?? attrs.selected);
+    Object.assign(details, readChooserDetails(() => "choices" in attrs
+      ? chooserCodec.parse(attrs.choices)
+      : parseXmlChooserChoices(element.inner), attrs.choices ?? ""));
+    details.selectedIndex = parseMaybeNumber(attrs.current ?? attrs.selectedIndex ?? attrs["selected-index"] ?? attrs.selected);
   }
 
   if (kind === "monitor") {
@@ -1305,7 +1329,7 @@ function classicWidgetTemplate(kind: AddableWidgetKind, bounds: WidgetBounds): s
         ...base("CHOOSER"),
         "chooser",
         "chooser",
-        "[one two]",
+        '"one" "two"',
         "0"
       ];
     case "monitor":
@@ -1392,8 +1416,7 @@ function xmlWidgetTemplate(kind: AddableWidgetKind, bounds: WidgetBounds): strin
     case "chooser":
       attrs.display = "chooser";
       attrs.variable = "chooser";
-      attrs.choices = "one two";
-      attrs.selectedIndex = "0";
+      attrs.current = "0";
       break;
     case "monitor":
       attrs.display = "monitor";
@@ -1434,6 +1457,9 @@ function xmlWidgetTemplate(kind: AddableWidgetKind, bounds: WidgetBounds): strin
   if (kind === "plot") {
     return `<${tagName} ${serializedAttrs}><setup></setup><update></update></${tagName}>`;
   }
+  if (kind === "chooser") {
+    return `<${tagName} ${serializedAttrs}>${writeXmlChooserChoices("", ["one", "two"], "")}</${tagName}>`;
+  }
   return `<${tagName} ${serializedAttrs} />`;
 }
 
@@ -1446,12 +1472,15 @@ function widgetRuntimeCommand(widget: InterfaceWidget): string | undefined {
     case "switch":
       return setCommand(details.variable, Boolean(details.on));
     case "chooser": {
+      if (details.choicesError) throw new Error(`Invalid choices for ${details.variable ?? widget.label}: ${details.choicesError}`);
       const choices = details.choices;
       const selectedIndex = typeof details.selectedIndex === "number" ? details.selectedIndex : Number(details.selectedIndex);
-      const selected = choices !== undefined && isStringArray(choices) && Number.isInteger(selectedIndex)
+      const selected = chooserCodec.isChoices(choices) && Number.isInteger(selectedIndex)
         ? choices[selectedIndex]
         : undefined;
-      return setCommand(details.variable, selected);
+      return typeof details.variable === "string" && isNetLogoIdentifier(details.variable) && selected !== undefined
+        ? `set ${details.variable} ${chooserCodec.serialize(selected)}`
+        : undefined;
     }
     case "input":
       return setCommand(details.variable ?? widget.label, details.value);
@@ -1515,8 +1544,8 @@ function serializeClassicProperty(type: string, property: string, value: WidgetP
     return value ? "T" : "NIL";
   }
 
-  if (property === "choices" && isStringArray(value)) {
-    return `[${value.map(serializeLogoListItem).join(" ")}]`;
+  if (property === "choices" && chooserCodec.isChoices(value)) {
+    return chooserCodec.format(value);
   }
 
   return String(value);
@@ -1570,12 +1599,6 @@ function isPlotPen(value: unknown): value is PlotPen {
     && typeof pen.updateCode === "string";
 }
 
-function serializeLogoListItem(value: string): string {
-  return /\s|"/.test(value)
-    ? `"${value.replace(/\\/g, "\\\\").replace(/"/g, "\\\"")}"`
-    : value;
-}
-
 function xmlPropertyAttributeName(attrs: Record<string, string>, tagName: string, property: string): string | undefined {
   if (property === "label") {
     if ("display" in attrs) {
@@ -1599,7 +1622,7 @@ function xmlPropertyAttributeName(attrs: Record<string, string>, tagName: string
     step: ["step"],
     units: ["units"],
     choices: ["choices"],
-    selectedIndex: ["selectedIndex", "selected-index", "selected"],
+    selectedIndex: ["current", "selectedIndex", "selected-index", "selected"],
     source: ["source", "reporter"],
     precision: ["precision"],
     xAxis: ["xAxis", "x-axis", "xLabel"],
@@ -1756,14 +1779,48 @@ function tokenizeRespectingQuotes(source: string): readonly string[] {
   return tokens;
 }
 
-function parseLogoList(value: string | undefined): readonly string[] | undefined {
-  if (!value) {
-    return undefined;
+function readChooserDetails(read: () => readonly ChooserValue[], source: string): Record<string, WidgetPropertyValue> {
+  try {
+    return { choices: read() };
+  } catch (error) {
+    // Keep malformed models editable, but never silently coerce their choices or
+    // synchronize a value that NetLogo would reject.
+    return { choices: [], choicesSource: source, choicesError: error instanceof Error ? error.message : String(error) };
   }
+}
 
-  const trimmed = value.trim();
-  const inner = trimmed.startsWith("[") && trimmed.endsWith("]") ? trimmed.slice(1, -1) : trimmed;
-  return tokenizeRespectingQuotes(inner);
+function parseXmlChooserChoices(inner: string): readonly ChooserValue[] {
+  const choices: ChooserValue[] = [];
+  const expression = /<choice\b([^>]*?)(?:\/\s*>|>([\s\S]*?)<\/choice\s*>)/gi;
+  for (const match of inner.matchAll(expression)) {
+    const attrs = parseAttributes(match[1]);
+    if (attrs.type === "string" && attrs.value !== undefined) choices.push(attrs.value);
+    else {
+      const values = chooserCodec.parse(attrs.type === "list" ? decodeXmlText(match[2] ?? "") : attrs.value ?? "");
+      const value = values[0];
+      if (values.length !== 1 || !(attrs.type === "double" && typeof value === "number"
+        || attrs.type === "boolean" && typeof value === "boolean"
+        || attrs.type === "list" && Array.isArray(value))) throw new Error("Invalid XML chooser choice");
+      choices.push(value);
+    }
+  }
+  return choices;
+}
+
+function writeXmlChooserChoices(inner: string, choices: readonly ChooserValue[], indent: string): string {
+  const serialized = choices.map(value => {
+    if (Array.isArray(value)) return `<choice type="list">${encodeXmlText(chooserCodec.serialize(value))}</choice>`;
+    const type = typeof value === "number" ? "double" : typeof value;
+    return `<choice type="${type}" value="${encodeXmlAttribute(String(value))}" />`;
+  }).join(`\n${indent}`);
+  const expression = /<choice\b[^>]*?(?:\/\s*>|>[\s\S]*?<\/choice\s*>)/gi;
+  let inserted = false;
+  const updated = inner.replace(expression, () => {
+    if (inserted) return "";
+    inserted = true;
+    return serialized;
+  });
+  return inserted ? updated : appendXmlChild(inner, serialized, indent);
 }
 
 function compactDetails(
@@ -1868,12 +1925,13 @@ function escapeRegExp(value: string): string {
 }
 
 function decodeXml(value: string): string {
-  return value
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, "\"")
-    .replace(/&apos;/g, "'")
-    .replace(/&amp;/g, "&");
+  const named: Record<string, string> = { lt: "<", gt: ">", quot: '"', apos: "'", amp: "&" };
+  return value.replace(/&(lt|gt|quot|apos|amp|#\d+|#x[\da-f]+);/gi, (entity, name: string) => {
+    if (name in named) return named[name];
+    const point = name.startsWith("#x") || name.startsWith("#X") ? parseInt(name.slice(2), 16) : Number(name.slice(1));
+    return Number.isInteger(point) && point >= 0 && point <= 0x10ffff && !(point >= 0xd800 && point <= 0xdfff)
+      ? String.fromCodePoint(point) : entity;
+  });
 }
 
 function encodeXmlAttribute(value: string): string {
@@ -1882,7 +1940,10 @@ function encodeXmlAttribute(value: string): string {
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&apos;")
     .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+    .replace(/>/g, "&gt;")
+    .replace(/\n/g, "&#10;")
+    .replace(/\r/g, "&#13;")
+    .replace(/\t/g, "&#9;");
 }
 
 function trimTrailingBlankLines(lines: readonly string[]): string[] {

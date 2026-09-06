@@ -91,6 +91,7 @@ code --install-extension ./vscode-netlogo-x.y.z.vsix --force
 - Supported widgets include views, buttons, sliders, switches, choosers, monitors, plots, inputs, text boxes, and output areas.
 - Slider boxes reserve at least 35px of height so their native thumb and numeric value stay inside the border, including in compact imported interfaces.
 - Choosers reserve separate title/dropdown rows and a 44px minimum height; existing 45px selectors keep their size and position without clipping the title.
+- Chooser options retain text, numeric, boolean, and nested-list values across import, editing, saving, and execution. The **Choices** editor uses NetLogo literal syntax (quote text; separate values by spaces or lines) and validates it before saving. Malformed existing options remain editable and are reported without silently changing the model. Native XML `choice` elements and the `current` selection are supported.
 - Switches use one vertically centered checkbox/text row with an associated clickable label, without a duplicate heading.
 - `Cmd+S` on macOS or `Ctrl+S` on Windows/Linux saves back to the real model document.
 

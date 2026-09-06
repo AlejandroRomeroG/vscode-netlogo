@@ -143,7 +143,7 @@ test("parses common classic NetLogo widgets with typed details", () => {
     "185",
     "mode",
     "mode",
-    "[\"slow mode\" fast]",
+    "\"slow mode\" \"fast\"",
     "1",
     "",
     "MONITOR",
@@ -1072,7 +1072,7 @@ test("builds runtime set commands for interactive widgets", () => {
     "185",
     "mode",
     "mode",
-    "[\"slow mode\" fast]",
+    "\"slow mode\" \"fast\"",
     "1",
     "",
     "INPUTBOX",
@@ -1117,7 +1117,7 @@ test("builds runtime set commands from xml widgets", () => {
   const source = [
     "<slider x=\"10\" y=\"10\" width=\"180\" height=\"32\" variable=\"density\" value=\"30\" />",
     "<switch x=\"10\" y=\"50\" width=\"120\" height=\"32\" variable=\"wrap?\" on=\"false\" />",
-    "<chooser x=\"10\" y=\"90\" width=\"160\" height=\"44\" variable=\"mode\" choices=\"slow fast\" selectedIndex=\"1\" />"
+    "<chooser x=\"10\" y=\"90\" width=\"160\" height=\"44\" variable=\"mode\" choices=\"&quot;slow&quot; &quot;fast&quot;\" selectedIndex=\"1\" />"
   ].join("");
 
   const preview = parseInterfacePreview(source, "xml");

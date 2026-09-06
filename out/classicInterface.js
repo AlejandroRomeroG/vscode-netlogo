@@ -9,6 +9,8 @@ exports.deleteInterfaceWidget = deleteInterfaceWidget;
 exports.getWidgetRuntimeCommands = getWidgetRuntimeCommands;
 exports.getMonitorReporters = getMonitorReporters;
 exports.getPlotExporters = getPlotExporters;
+const chooserValues_1 = require("./chooserValues");
+const chooserCodec = (0, chooserValues_1.createChooserCodec)();
 const KnownClassicWidgetTypes = new Set([
     "GRAPHICS-WINDOW",
     "BUTTON",
@@ -42,6 +44,19 @@ function updateInterfaceWidgetBounds(source, format, widgetId, bounds) {
         : updateClassicWidgetBounds(source, widgetId, bounds);
 }
 function updateInterfaceWidgetProperties(source, format, widgetId, updates) {
+    if (updates.choices !== undefined) {
+        if (!chooserCodec.isChoices(updates.choices) || updates.choices.length === 0) {
+            throw new Error("A chooser needs at least one valid choice.");
+        }
+        const widget = parseInterfacePreview(source, format).widgets.find(candidate => candidate.id === widgetId);
+        if (widget?.kind === "chooser") {
+            const previous = chooserCodec.isChoices(widget.details?.choices) ? widget.details.choices : [];
+            updates = { ...updates, selectedIndex: chooserCodec.selectionAfterEdit(previous, Number(widget.details?.selectedIndex), updates.choices) };
+            if (!widget.details?.choicesError && chooserCodec.format(previous) === chooserCodec.format(updates.choices)) {
+                delete updates.choices;
+            }
+        }
+    }
     return format === "xml"
         ? updateXmlWidgetProperties(source, widgetId, updates)
         : updateClassicWidgetProperties(source, widgetId, updates);
@@ -218,7 +233,8 @@ function createClassicWidget(source, kind, bounds) {
     if (source.trim().length === 0) {
         return block;
     }
-    return `${source}${source.endsWith("\n") ? "" : lineEnding}${block}`;
+    const separator = source.endsWith(lineEnding + lineEnding) ? "" : source.endsWith(lineEnding) ? lineEnding : lineEnding + lineEnding;
+    return `${source}${separator}${block}`;
 }
 function deleteClassicWidget(source, widgetId) {
     const targetIndex = parseWidgetId(widgetId, "classic");
@@ -293,7 +309,7 @@ function parseClassicWidgetBlock(block, index) {
                 ...baseWidget(index, type, "chooser", stringAt(block, 5) || stringAt(block, 6) || "Chooser", box, block),
                 details: compactDetails({
                     variable: stringAt(block, 6),
-                    choices: parseLogoList(stringAt(block, 7)),
+                    ...readChooserDetails(() => chooserCodec.parse(block[7] ?? ""), block[7] ?? ""),
                     selectedIndex: numberAt(block, 8)
                 })
             };
@@ -643,6 +659,15 @@ function updateXmlElementProperties(element, updates) {
     let inner = element.inner;
     let needsChildren = false;
     for (const [property, value] of Object.entries(updates)) {
+        if (element.tagName === "chooser" && property === "choices" && chooserCodec.isChoices(value)) {
+            if ("choices" in element.attrs)
+                openingTag = writeXmlAttr(openingTag, "choices", chooserCodec.format(value));
+            else {
+                inner = writeXmlChooserChoices(inner, value, xmlChildIndent(element));
+                needsChildren = true;
+            }
+            continue;
+        }
         if (element.tagName === "plot" && property === "autoplot" && typeof value === "boolean") {
             openingTag = writeXmlAttr(openingTag, xmlExistingAttrName(element.attrs, ["autoPlotX", "auto-plot-x"]) ?? "autoPlotX", String(value));
             openingTag = writeXmlAttr(openingTag, xmlExistingAttrName(element.attrs, ["autoPlotY", "auto-plot-y"]) ?? "autoPlotY", String(value));
@@ -779,7 +804,7 @@ function writeXmlAttr(tag, name, value) {
     const escapedValue = encodeXmlAttribute(String(value));
     const expression = new RegExp(`(\\s${escapeRegExp(name)}\\s*=\\s*)(["'])(.*?)\\2`, "i");
     if (expression.test(tag)) {
-        return tag.replace(expression, `$1$2${escapedValue}$2`);
+        return tag.replace(expression, (_match, prefix, quote) => `${prefix}${quote}${escapedValue}${quote}`);
     }
     const insertAt = tag.endsWith("/>") ? tag.length - 2 : tag.length - 1;
     return `${tag.slice(0, insertAt)} ${name}="${escapedValue}"${tag.slice(insertAt)}`;
@@ -832,11 +857,10 @@ function normalizeXmlDetails(element, elementText) {
         details.on = parseXmlBoolean(attrs.on ?? attrs.value);
     }
     if (kind === "chooser") {
-        const choices = parseLogoList(attrs.choices);
-        if (choices) {
-            details.choices = choices;
-        }
-        details.selectedIndex = parseMaybeNumber(attrs.selectedIndex ?? attrs["selected-index"] ?? attrs.selected);
+        Object.assign(details, readChooserDetails(() => "choices" in attrs
+            ? chooserCodec.parse(attrs.choices)
+            : parseXmlChooserChoices(element.inner), attrs.choices ?? ""));
+        details.selectedIndex = parseMaybeNumber(attrs.current ?? attrs.selectedIndex ?? attrs["selected-index"] ?? attrs.selected);
     }
     if (kind === "monitor") {
         details.source = xmlMonitorSource(element, elementText);
@@ -1038,7 +1062,7 @@ function classicWidgetTemplate(kind, bounds) {
                 ...base("CHOOSER"),
                 "chooser",
                 "chooser",
-                "[one two]",
+                '"one" "two"',
                 "0"
             ];
         case "monitor":
@@ -1123,8 +1147,7 @@ function xmlWidgetTemplate(kind, bounds) {
         case "chooser":
             attrs.display = "chooser";
             attrs.variable = "chooser";
-            attrs.choices = "one two";
-            attrs.selectedIndex = "0";
+            attrs.current = "0";
             break;
         case "monitor":
             attrs.display = "monitor";
@@ -1164,6 +1187,9 @@ function xmlWidgetTemplate(kind, bounds) {
     if (kind === "plot") {
         return `<${tagName} ${serializedAttrs}><setup></setup><update></update></${tagName}>`;
     }
+    if (kind === "chooser") {
+        return `<${tagName} ${serializedAttrs}>${writeXmlChooserChoices("", ["one", "two"], "")}</${tagName}>`;
+    }
     return `<${tagName} ${serializedAttrs} />`;
 }
 function widgetRuntimeCommand(widget) {
@@ -1174,12 +1200,16 @@ function widgetRuntimeCommand(widget) {
         case "switch":
             return setCommand(details.variable, Boolean(details.on));
         case "chooser": {
+            if (details.choicesError)
+                throw new Error(`Invalid choices for ${details.variable ?? widget.label}: ${details.choicesError}`);
             const choices = details.choices;
             const selectedIndex = typeof details.selectedIndex === "number" ? details.selectedIndex : Number(details.selectedIndex);
-            const selected = choices !== undefined && isStringArray(choices) && Number.isInteger(selectedIndex)
+            const selected = chooserCodec.isChoices(choices) && Number.isInteger(selectedIndex)
                 ? choices[selectedIndex]
                 : undefined;
-            return setCommand(details.variable, selected);
+            return typeof details.variable === "string" && isNetLogoIdentifier(details.variable) && selected !== undefined
+                ? `set ${details.variable} ${chooserCodec.serialize(selected)}`
+                : undefined;
         }
         case "input":
             return setCommand(details.variable ?? widget.label, details.value);
@@ -1228,8 +1258,8 @@ function serializeClassicProperty(type, property, value) {
     if (property === "forever" || property === "multiline") {
         return value ? "T" : "NIL";
     }
-    if (property === "choices" && isStringArray(value)) {
-        return `[${value.map(serializeLogoListItem).join(" ")}]`;
+    if (property === "choices" && chooserCodec.isChoices(value)) {
+        return chooserCodec.format(value);
     }
     return String(value);
 }
@@ -1274,11 +1304,6 @@ function isPlotPen(value) {
         && typeof pen.setupCode === "string"
         && typeof pen.updateCode === "string";
 }
-function serializeLogoListItem(value) {
-    return /\s|"/.test(value)
-        ? `"${value.replace(/\\/g, "\\\\").replace(/"/g, "\\\"")}"`
-        : value;
-}
 function xmlPropertyAttributeName(attrs, tagName, property) {
     if (property === "label") {
         if ("display" in attrs) {
@@ -1301,7 +1326,7 @@ function xmlPropertyAttributeName(attrs, tagName, property) {
         step: ["step"],
         units: ["units"],
         choices: ["choices"],
-        selectedIndex: ["selectedIndex", "selected-index", "selected"],
+        selectedIndex: ["current", "selectedIndex", "selected-index", "selected"],
         source: ["source", "reporter"],
         precision: ["precision"],
         xAxis: ["xAxis", "x-axis", "xLabel"],
@@ -1446,13 +1471,51 @@ function tokenizeRespectingQuotes(source) {
     }
     return tokens;
 }
-function parseLogoList(value) {
-    if (!value) {
-        return undefined;
+function readChooserDetails(read, source) {
+    try {
+        return { choices: read() };
     }
-    const trimmed = value.trim();
-    const inner = trimmed.startsWith("[") && trimmed.endsWith("]") ? trimmed.slice(1, -1) : trimmed;
-    return tokenizeRespectingQuotes(inner);
+    catch (error) {
+        // Keep malformed models editable, but never silently coerce their choices or
+        // synchronize a value that NetLogo would reject.
+        return { choices: [], choicesSource: source, choicesError: error instanceof Error ? error.message : String(error) };
+    }
+}
+function parseXmlChooserChoices(inner) {
+    const choices = [];
+    const expression = /<choice\b([^>]*?)(?:\/\s*>|>([\s\S]*?)<\/choice\s*>)/gi;
+    for (const match of inner.matchAll(expression)) {
+        const attrs = parseAttributes(match[1]);
+        if (attrs.type === "string" && attrs.value !== undefined)
+            choices.push(attrs.value);
+        else {
+            const values = chooserCodec.parse(attrs.type === "list" ? decodeXmlText(match[2] ?? "") : attrs.value ?? "");
+            const value = values[0];
+            if (values.length !== 1 || !(attrs.type === "double" && typeof value === "number"
+                || attrs.type === "boolean" && typeof value === "boolean"
+                || attrs.type === "list" && Array.isArray(value)))
+                throw new Error("Invalid XML chooser choice");
+            choices.push(value);
+        }
+    }
+    return choices;
+}
+function writeXmlChooserChoices(inner, choices, indent) {
+    const serialized = choices.map(value => {
+        if (Array.isArray(value))
+            return `<choice type="list">${encodeXmlText(chooserCodec.serialize(value))}</choice>`;
+        const type = typeof value === "number" ? "double" : typeof value;
+        return `<choice type="${type}" value="${encodeXmlAttribute(String(value))}" />`;
+    }).join(`\n${indent}`);
+    const expression = /<choice\b[^>]*?(?:\/\s*>|>[\s\S]*?<\/choice\s*>)/gi;
+    let inserted = false;
+    const updated = inner.replace(expression, () => {
+        if (inserted)
+            return "";
+        inserted = true;
+        return serialized;
+    });
+    return inserted ? updated : appendXmlChild(inner, serialized, indent);
 }
 function compactDetails(details) {
     const compacted = {};
@@ -1535,12 +1598,14 @@ function escapeRegExp(value) {
     return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 function decodeXml(value) {
-    return value
-        .replace(/&lt;/g, "<")
-        .replace(/&gt;/g, ">")
-        .replace(/&quot;/g, "\"")
-        .replace(/&apos;/g, "'")
-        .replace(/&amp;/g, "&");
+    const named = { lt: "<", gt: ">", quot: '"', apos: "'", amp: "&" };
+    return value.replace(/&(lt|gt|quot|apos|amp|#\d+|#x[\da-f]+);/gi, (entity, name) => {
+        if (name in named)
+            return named[name];
+        const point = name.startsWith("#x") || name.startsWith("#X") ? parseInt(name.slice(2), 16) : Number(name.slice(1));
+        return Number.isInteger(point) && point >= 0 && point <= 0x10ffff && !(point >= 0xd800 && point <= 0xdfff)
+            ? String.fromCodePoint(point) : entity;
+    });
 }
 function encodeXmlAttribute(value) {
     return value
@@ -1548,7 +1613,10 @@ function encodeXmlAttribute(value) {
         .replace(/"/g, "&quot;")
         .replace(/'/g, "&apos;")
         .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;");
+        .replace(/>/g, "&gt;")
+        .replace(/\n/g, "&#10;")
+        .replace(/\r/g, "&#13;")
+        .replace(/\t/g, "&#9;");
 }
 function trimTrailingBlankLines(lines) {
     const next = [...lines];
