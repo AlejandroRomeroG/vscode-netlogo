@@ -2,6 +2,32 @@
 
 NetLogo executes model rules and renders the 2D world. The extension displays the native PNG and reconstructs plot widgets from native plot data. A slow view update can therefore come from simulation, image export, plot transfer, or the browser; it does not necessarily indicate a slow agent renderer.
 
+## Mouse interaction
+
+In Interact, the stable 2D view host captures pointer movement and left-button state while the native PNG remains the renderer. It accounts for CSS zoom, widget resizing, and the image's aspect ratio. Input outside the rendered image is outside the world. Movement is coalesced to the latest animation-frame update; button edges and entry/exit are sent immediately. Layout, tab changes, loss of focus, pointer cancellation, and panel disposal release the button.
+
+NetLogo 6.4's four GUI mouse reporters normally return fixed defaults in a headless workspace. The bridge compiles process-local adapters for these reporters, registered only with its 2D workspace. They reuse the installed `org.nlogo.window.ViewMouseHandler` for native coordinate translation, world wrapping, follow offsets, and small-patch rounding. No installed NetLogo JAR or model source is patched. These adapters use internal NetLogo APIs and are tested against 6.4; compatibility with other releases is not assumed.
+
+Mouse messages reach a dedicated input reader independently of the serial model-command executor. This allows a release to be observed inside a running `while [mouse-down?]` command. Input does not call `go`, add ticks, or consume random numbers. Models must execute their own mouse-handling code: for **Paths**, use **Setup → Forever**, then click the world to add a building or click near an existing one to remove it. Like native polling, a press entirely between model checks can be missed. View snapshots are still presented after commands finish; an unbounded mouse loop does not stream intermediate PNGs.
+
+The coordinate footer and its grid row are removed for both 2D and 3D views. Saved widget bounds, world dimensions, and the 3D navigation controls are unchanged; the image uses the freed vertical space. The 3D camera does not forward these 2D mouse reporters.
+
+Native integration tests use unchanged **Paths**, **Mouse Example**, and **Mouse Drag One Example** models with seed 24680. Checks cover building creation/removal and held-click latching, drawing, dragging, release during a running command, resizing, follow offsets, rounding, and preservation of the RNG sequence. `scripts/checkViewMouse.js` also connects actual browser pointer events through the generated production handlers to Paths: nine width/height/zoom combinations plus three release cases, checking native building coordinates and decoded-image swaps. It requires Node 20+, Playwright, and Edge (or `BROWSER_CHANNEL`); all temporary test workspaces are closed.
+
+```bash
+npm run compile
+node --test test/viewMouse*.test.js
+node scripts/checkViewMouse.js
+```
+
+## View frame sizing
+
+The 2D frame fits the native image's aspect ratio inside the saved widget rectangle, accounting for its 22px heading and zoom-rounded borders. This removes the empty side strips seen in Paths, and equivalent top/bottom strips in wide worlds, without stretching or cropping the PNG. The frame stays anchored at the saved position and cannot expand into neighboring widgets. Saved dimensions and world settings are not rewritten; 3D frames are unaffected.
+
+Fitting updates when the image aspect, layout dimensions, or browser zoom changes, including while paused. Repeated frames with the same geometry do not trigger computed-style reads or CSS writes. The existing decoded-frame queue and image-based pointer mapping remain in use.
+
+After compilation, `node scripts/checkViewFit.js` checks seven image/widget aspect combinations, three font sizes, three zoom levels, and both Interact/Layout modes using the production CSS and renderer. It verifies containment, unchanged declared bounds, and less than one screen pixel of rounding slack in either axis. It requires Node 20+, Playwright, and Edge (or `BROWSER_CHANNEL`); synthetic PNGs avoid starting another simulation. `scripts/checkViewMouse.js` additionally checks native Paths clicks at the fitted sizes.
+
 ## Long-running models
 
 Two history-dependent costs were reproduced with Wolf Sheep Simple 5:

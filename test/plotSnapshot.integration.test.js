@@ -1,4 +1,5 @@
 const fs = require("node:fs");
+const { bridgeSourcePaths } = require("../out/javaBridge");
 const os = require("node:os");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
@@ -28,7 +29,7 @@ test("binary plot snapshots preserve native metadata, history, resets, colors, a
   try {
     const compile = spawnSync("javac", [
       "-cp", installation.classPath.join(path.delimiter), "-d", tempDir,
-      path.join(root, "resources", "java", "NetLogoCommandBridge.java")
+      ...bridgeSourcePaths(path.join(root, "resources", "java"))
     ], { encoding: "utf8", timeout: 60000 });
     assert.equal(compile.status, 0, compile.error?.message || compile.stderr || compile.stdout);
 

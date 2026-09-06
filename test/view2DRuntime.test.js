@@ -152,3 +152,50 @@ test("2D presenters are disposed for removed views, failed exports, and 3D repla
     assert.equal(state.twoViewControllers.size, 0);
   }
 });
+
+test("2D frame fitting follows image dimensions without rewriting saved bounds or repeating CSS writes", () => {
+  const window = { devicePixelRatio: 2 };
+  let styleReads = 0, border = "1px";
+  const fit = new Function("window", "getComputedStyle",
+    fragment("function fitTwoViewFrame(element)", "function mountTwoViewMouse(host)") + "return fitTwoViewFrame;")(window, () => {
+      styleReads++;
+      return { borderLeftWidth: border, borderRightWidth: border, borderTopWidth: border, borderBottomWidth: border };
+    });
+  const properties = new Map(), classes = new Set(["view-widget"]), writes = [];
+  const image = { naturalWidth: 505, naturalHeight: 505 };
+  const element = {
+    classList: { contains: value => classes.has(value), add: value => classes.add(value) },
+    querySelector: () => image,
+    style: { width: "513px", height: "514px",
+      getPropertyValue: key => properties.get(key) || "",
+      setProperty: (key, value) => { properties.set(key, value); writes.push([key, value]); } }
+  };
+  fit(element);
+  assert.equal(classes.has("two-view-widget"), true);
+  assert.equal(properties.get("--view-image-aspect"), "1");
+  assert.equal(element.style.width, "513px");
+  assert.equal(element.style.height, "514px");
+  assert.equal(properties.get("--view-border-x"), "2px");
+  assert.equal(properties.get("--view-border-y"), "2px");
+  assert.equal(writes.length, 5);
+  fit(element);
+  assert.equal(writes.length, 5, "Unchanged decoded frames must not rewrite layout CSS");
+  assert.equal(styleReads, 1, "Unchanged decoded frames must not trigger computed-style reads");
+  image.naturalWidth = 1010;
+  fit(element);
+  assert.equal(properties.get("--view-image-aspect"), "2");
+  element.style.width = "620px";
+  fit(element);
+  assert.equal(properties.get("--view-frame-width"), "620px");
+  window.devicePixelRatio = 1.6;
+  border = "1.25px";
+  fit(element);
+  assert.equal(properties.get("--view-border-x"), "2.5px", "VS Code zoom must refresh quantized borders even while paused");
+  assert.equal(properties.get("--view-border-y"), "2.5px");
+  assert.equal(styleReads, 4);
+  const before = writes.length;
+  fit(null);
+  classes.delete("view-widget");
+  fit(element);
+  assert.equal(writes.length, before, "Unattached frames and non-view widgets must not be fitted");
+});

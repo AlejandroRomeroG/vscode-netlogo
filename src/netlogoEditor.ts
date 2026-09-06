@@ -2,6 +2,7 @@ import * as path from "path";
 import * as vscode from "vscode";
 import { createChooserCodec } from "./chooserValues";
 import { createTwoViewFrameQueue } from "./view2D";
+import { createViewMouseInput, isViewMouseState, type ViewMouseState } from "./viewMouse";
 import { externalInfoUrl, loadInfoLocalImage, resolveInfoLocalFile } from "./infoResources";
 import { promptForNetLogoCommand, rememberNetLogoCommand } from "./commandPrompt";
 import {
@@ -107,6 +108,11 @@ interface WebviewReadyMessage {
   readonly type: "ready";
 }
 
+interface WebviewMouseMessage {
+  readonly type: "view-mouse";
+  readonly state: ViewMouseState;
+}
+
 type WebviewMessage =
   | WebviewUpdateMessage
   | WebviewRunMessage
@@ -123,7 +129,8 @@ type WebviewMessage =
   | WebviewInfoImageMessage
   | WebviewOpenNativeMessage
   | WebviewSaveDocumentMessage
-  | WebviewReadyMessage;
+  | WebviewReadyMessage
+  | WebviewMouseMessage;
 
 export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvider {
   public static readonly viewType = "netlogo.modelEditor";
@@ -188,15 +195,24 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
     const viewStateSubscription = webviewPanel.onDidChangeViewState(event => {
       if (event.webviewPanel.visible) {
         updateWebview();
+      } else {
+        this.runner.updateViewMouse(document.uri, { inside: false, down: false, u: 0, v: 0 });
       }
     });
 
     webviewPanel.onDidDispose(() => {
+      this.runner.updateViewMouse(document.uri, { inside: false, down: false, u: 0, v: 0 });
       documentChangeSubscription.dispose();
       viewStateSubscription.dispose();
     });
 
     webviewPanel.webview.onDidReceiveMessage(async (message: WebviewMessage) => {
+      if (message.type === "view-mouse") {
+        if (webviewPanel.visible && isViewMouseState(message.state)) {
+          this.runner.updateViewMouse(document.uri, message.state);
+        }
+        return;
+      }
       if (message.type === "ready") {
         updateWebview();
         return;
@@ -1267,9 +1283,26 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
 
     .widget.view-widget {
       display: grid;
-      grid-template-rows: auto 1fr auto;
+      grid-template-rows: auto minmax(0, 1fr);
       padding: 0;
       background: var(--vscode-editor-background);
+    }
+
+    .widget.view-widget.two-view-widget {
+      /* Fit the frame inside its saved bounds, not the world inside an
+         oversized frame. Border widths account for browser zoom rounding. */
+      min-width: 0;
+      min-height: 0;
+      max-width: calc((var(--view-frame-height) - 22px - var(--view-border-y)) * var(--view-image-aspect) + var(--view-border-x));
+      max-height: calc((var(--view-frame-width) - var(--view-border-x)) / var(--view-image-aspect) + 22px + var(--view-border-y));
+    }
+
+    .two-view-widget > .view-title {
+      height: 22px;
+      line-height: 13px;
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
     }
 
     .view-title,
@@ -1298,6 +1331,10 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
       background: var(--vscode-editorWidget-background);
     }
 
+    .interact-mode .two-view {
+      touch-action: none;
+    }
+
     .view-image {
       display: block;
       position: absolute;
@@ -1306,6 +1343,8 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
       height: 100%;
       min-height: 0;
       object-fit: contain;
+      pointer-events: none;
+      user-select: none;
       background: var(--vscode-editorWidget-background);
     }
 
@@ -1420,13 +1459,6 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
     .three-control-button.active {
       color: #111;
       background: #f1f1f1;
-    }
-
-    .view-footer {
-      padding: 3px 7px;
-      border-top: 1px solid var(--vscode-panel-border);
-      color: var(--vscode-descriptionForeground);
-      font-size: 11px;
     }
 
     .slider-widget,
@@ -2058,6 +2090,7 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
   <script nonce="${nonce}">
     const chooserCodec = (${createChooserCodec.toString()})();
     const createTwoViewFrameQueue = ${createTwoViewFrameQueue.toString()};
+    const createViewMouseInput = ${createViewMouseInput.toString()};
     const vscode = acquireVsCodeApi();
     const restoredUiState = vscode.getState?.() ?? {};
     const knownWidgetTypes = new Set([
@@ -2265,6 +2298,10 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
     const timers = new Map();
 
     window.addEventListener("resize", updateEditorLayout);
+    window.addEventListener("blur", resetViewMouse);
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) resetViewMouse();
+    });
 
     window.addEventListener("netlogo-three-ready", () => {
       renderInterface();
@@ -2626,6 +2663,7 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
         infoEditorSurface.style.height = infoEditorHeight + "px";
         infoEditorSurface.style.minHeight = infoEditorHeight + "px";
       }
+      surface.querySelectorAll(".two-view-widget").forEach(fitTwoViewFrame);
     }
 
     function updateRuntimeBanner(message) {
@@ -2656,6 +2694,7 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
 
     function activateTab(tab) {
       state.activeTab = validUiTab(tab);
+      if (state.activeTab !== "interface") resetViewMouse();
 
       document.querySelectorAll(".tab").forEach(button => {
         button.setAttribute("aria-selected", String(button.dataset.tab === state.activeTab));
@@ -3496,6 +3535,7 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
 
       state.pendingInterfaceRender = false;
       const widgets = state.interfacePreview.widgets ?? [];
+      if (state.interfaceMode !== "interact" || state.activeTab !== "interface") resetViewMouse();
       pruneTwoViews(widgets);
       disposeThreeViews();
       surface.replaceChildren();
@@ -3545,6 +3585,7 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
         element.addEventListener("keydown", event => handleWidgetKeydown(event, widget));
         surface.append(element);
         if (widget.kind === "view") {
+          fitTwoViewFrame(element);
           const dispose = mountThreeView(element);
           if (dispose) {
             state.threeViewDisposers.push(dispose);
@@ -3587,6 +3628,10 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
           state.twoViewControllers.delete(id);
         }
       }
+    }
+
+    function resetViewMouse() {
+      for (const controller of state.twoViewControllers.values()) controller.mouse?.reset();
     }
 
     function refreshMountedTwoViews() {
@@ -4502,6 +4547,7 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
       element.style.top = bounds.y + "px";
       element.style.width = bounds.width + "px";
       element.style.height = bounds.height + "px";
+      fitTwoViewFrame(element);
     }
 
     function updateSurfaceBounds() {
@@ -4543,8 +4589,7 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
         case "view":
           return fragment([
             node("div", "view-title", widget.label),
-            renderViewBody(widget),
-            node("div", "view-footer", viewWorldLabel(widget))
+            renderViewBody(widget)
           ]);
         case "button":
           return node("span", "widget-label", widget.label);
@@ -4604,8 +4649,10 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
         let controller = state.twoViewControllers.get(widget.id);
         if (!controller) {
           const host = node("div", "two-view", "");
+          const mouse = mountTwoViewMouse(host);
           controller = {
             host,
+            mouse,
             ...createTwoViewFrameQueue({
               createImage: () => {
                 const image = node("img", "view-image", "");
@@ -4613,7 +4660,10 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
                 image.alt = "NetLogo view";
                 return image;
               },
-              present: image => host.replaceChildren(image),
+              present: image => {
+                host.replaceChildren(image);
+                fitTwoViewFrame(host.parentElement);
+              },
               onError: error => {
                 console.error("NetLogo 2D image decode failed", error);
                 setStatus(host.querySelector(".view-image")
@@ -4622,6 +4672,8 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
               }
             })
           };
+          const disposeFrames = controller.dispose;
+          controller.dispose = () => { mouse.dispose(); disposeFrames(); };
           state.twoViewControllers.set(widget.id, controller);
         }
         controller.update(state.viewImageDataUri);
@@ -4629,6 +4681,68 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
       }
 
       return node("div", "view-grid", "");
+    }
+
+    function fitTwoViewFrame(element) {
+      if (!element?.classList.contains("view-widget")) return;
+      const image = element.querySelector(".two-view .view-image");
+      if (!image?.naturalWidth || !image.naturalHeight) return;
+      const aspect = String(image.naturalWidth / image.naturalHeight);
+      const key = [element.style.width, element.style.height, aspect, window.devicePixelRatio, element.style.zoom].join(":");
+      if (element.twoViewFitKey === key) return;
+      // Zoom can quantize a declared 1px border to a different CSS width.
+      // Read it only when fit inputs change, never on unchanged video frames.
+      const style = getComputedStyle(element);
+      // Keep the declared layout bounds and image-based pointer mapping. CSS
+      // constrains only the visible frame, and does not crop/stretch the PNG.
+      const values = {
+        "--view-frame-width": element.style.width,
+        "--view-frame-height": element.style.height,
+        "--view-image-aspect": aspect,
+        "--view-border-x": (parseFloat(style.borderLeftWidth) + parseFloat(style.borderRightWidth)) + "px",
+        "--view-border-y": (parseFloat(style.borderTopWidth) + parseFloat(style.borderBottomWidth)) + "px"
+      };
+      for (const [name, value] of Object.entries(values)) {
+        if (element.style.getPropertyValue(name) !== value) element.style.setProperty(name, value);
+      }
+      element.classList.add("two-view-widget");
+      element.twoViewFitKey = key;
+    }
+
+    function mountTwoViewMouse(host) {
+      const input = createViewMouseInput({
+        send: mouse => vscode.postMessage({ type: "view-mouse", state: mouse }),
+        schedule: callback => requestAnimationFrame(callback),
+        cancel: id => cancelAnimationFrame(id)
+      });
+      function update(event, immediate = false) {
+        if (state.interfaceMode !== "interact" || state.activeTab !== "interface") {
+          input.reset(); return;
+        }
+        const image = host.querySelector(".view-image");
+        const rect = host.getBoundingClientRect();
+        input.update({ x: event.clientX, y: event.clientY, down: (event.buttons & 1) !== 0 && !event.ctrlKey },
+          image ? { left: rect.left, top: rect.top, width: rect.width, height: rect.height,
+            naturalWidth: image.naturalWidth, naturalHeight: image.naturalHeight } : null, immediate);
+      }
+      host.addEventListener("pointerdown", event => {
+        if (state.interfaceMode !== "interact") return;
+        if (event.button !== 0 || event.ctrlKey) return;
+        event.preventDefault();
+        event.stopPropagation();
+        host.setPointerCapture(event.pointerId);
+        update(event, true);
+      });
+      host.addEventListener("pointermove", event => update(event));
+      host.addEventListener("pointerenter", event => update(event));
+      host.addEventListener("pointerup", event => update(event, true));
+      host.addEventListener("pointerleave", () => input.reset());
+      host.addEventListener("pointercancel", () => input.reset());
+      host.addEventListener("lostpointercapture", event => {
+        if (event.buttons & 1) input.reset();
+      });
+      host.addEventListener("contextmenu", () => input.reset());
+      return input;
     }
 
     function mountThreeView(element) {
@@ -7017,47 +7131,6 @@ export class NetLogoModelEditorProvider implements vscode.CustomTextEditorProvid
         .map(key => details[key])
         .filter(value => value !== undefined && value !== "");
       return parts.length > 0 ? parts.join(" ") : fallback;
-    }
-
-    function viewWorldLabel(widget) {
-      const details = widget.details ?? {};
-      const parts = [];
-      const xRange = worldRangeText(details.minPxcor, details.maxPxcor);
-      const yRange = worldRangeText(details.minPycor, details.maxPycor);
-      const zRange = worldRangeText(details.minPzcor, details.maxPzcor);
-
-      if (xRange) {
-        parts.push("x: " + xRange);
-      }
-      if (yRange) {
-        parts.push("y: " + yRange);
-      }
-      if (zRange) {
-        parts.push("z: " + zRange);
-      }
-
-      return parts.length > 0 ? parts.join("   ") : "World";
-    }
-
-    function worldRangeText(min, max) {
-      if (!isPresentWorldValue(min) || !isPresentWorldValue(max)) {
-        return "";
-      }
-
-      return worldNumberText(min) + ".." + worldNumberText(max);
-    }
-
-    function isPresentWorldValue(value) {
-      return value !== undefined && value !== "";
-    }
-
-    function worldNumberText(value) {
-      const numeric = Number(value);
-      if (!Number.isFinite(numeric)) {
-        return String(value);
-      }
-
-      return Number.isInteger(numeric) ? String(numeric) : String(Number(numeric.toFixed(3)));
     }
 
     function selectedChoice(widget) {

@@ -2,6 +2,7 @@
 // Run after compiling the extension: NETLOGO_HOME=/path/to/NetLogo node scripts/benchmark2D.js
 // This script uses the existing out/ modules and compiles only the Java bridge in a temporary directory.
 const fs = require("node:fs");
+const { bridgeSourcePaths } = require("../out/javaBridge");
 const os = require("node:os");
 const path = require("node:path");
 const readline = require("node:readline");
@@ -94,7 +95,7 @@ async function main() {
   let exited;
   try {
     const classPath = installation.classPath.join(path.delimiter);
-    const compiled = spawnSync(process.env.JAVAC || "javac", ["-cp", classPath, "-d", directory, bridgeSource], {
+    const compiled = spawnSync(process.env.JAVAC || "javac", ["-cp", classPath, "-d", directory, ...bridgeSourcePaths(path.dirname(bridgeSource))], {
       encoding: "utf8", timeout: 60000
     });
     if (compiled.error || compiled.status !== 0) {

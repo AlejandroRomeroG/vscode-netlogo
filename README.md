@@ -132,6 +132,9 @@ See [Info rendering and validation](docs/info-rendering.md) for checked model ex
 ### 2D viewer and long runs
 
 - Keeps NetLogo's native 2D rendering, turtle shapes, colors, and transparency; the extension displays its PNG without recoloring it.
+- Sends 2D pointer position, left-button presses/releases, and entry/exit to the model's `mouse-inside?`, `mouse-down?`, `mouse-xcor`, and `mouse-ycor` reporters in **Interact**. Models such as **Paths** can place/remove buildings, and mouse examples can draw or drag turtles. Run the model's mouse-handling button first; clicking does not execute `go` automatically.
+- Fits the visible 2D frame to the image's aspect ratio within the saved widget bounds, removing empty side/top/bottom strips without stretching or cropping the world. Clicks stay aligned in resized and zoomed views.
+- Switching to Layout, leaving Interface, or losing focus releases the pointer. The coordinate footer is removed from both 2D and 3D views without changing saved world or widget bounds.
 - Decodes each 2D PNG off-screen and replaces the visible image only when it is ready, preventing black flashes between updates. One active decode and one latest pending request keep presentation work bounded without changing model execution or plot history.
 - Reuses the 2D view container across updates and Layout changes; monitors and plots refresh without rebuilding controls or Properties on every frame. A failed image decode is reported while the previous good frame remains visible.
 - Reads plot histories directly through the native plot API instead of converting the full history to CSV and back each frame. Every point remains available, including after pen resets, histogram replacement, and changes to temporary pens.

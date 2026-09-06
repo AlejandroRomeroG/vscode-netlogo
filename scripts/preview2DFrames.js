@@ -2,6 +2,7 @@
 // JSON file contains data:image/png;base64,... strings; otherwise use synthetic
 // frames. This opens no native application and never modifies a model.
 const fs = require("node:fs");
+const { bridgeSourcePaths } = require("../out/javaBridge");
 const http = require("node:http");
 const os = require("node:os");
 const path = require("node:path");
@@ -18,7 +19,7 @@ function captureHotellingFrames() {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), "netlogo-frame-preview-"));
   try {
     const compile = spawnSync("javac", ["-cp", installation.classPath.join(path.delimiter), "-d", temp,
-      path.join(__dirname, "../resources/java/NetLogoCommandBridge.java")], { encoding: "utf8", timeout: 30000 });
+      ...bridgeSourcePaths(path.join(__dirname, "../resources/java"))], { encoding: "utf8", timeout: 30000 });
     assert.equal(compile.status, 0, compile.error?.message || compile.stderr);
     const commands = [["COMMAND", 'random-seed 24680 set number-of-stores 5 set rules "normal" set layout "plane" setup']];
     for (let i = 0; i < 90; i++) commands.push(["COMMAND", "go"], ["EXPORT_VIEW", path.join(temp, "frame.png")]);

@@ -1,4 +1,5 @@
 import org.nlogo.headless.HeadlessWorkspace;
+import local.netlogo.ViewMouse;
 
 import java.io.BufferedReader;
 import java.io.BufferedOutputStream;
@@ -15,6 +16,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.Base64;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 public final class NetLogoCommandBridge {
   private static final String MODEL_SECTION_DELIMITER = "@#$#@#$#@";
@@ -58,7 +62,7 @@ public final class NetLogoCommandBridge {
         workspace.command(args[modelPathIndex + 1]);
         System.out.println("OK");
       } else {
-        runSession(workspace);
+        runSession(workspace, threeD ? null : new ViewMouse(workspace));
       }
     } catch (Throwable error) {
       error.printStackTrace(System.err);
@@ -147,75 +151,100 @@ public final class NetLogoCommandBridge {
     }
   }
 
-  private static void runSession(HeadlessWorkspace workspace) throws Exception {
+  private static void runSession(HeadlessWorkspace workspace, ViewMouse mouse) throws Exception {
     System.out.println(READY);
     System.out.flush();
 
     BufferedReader reader = new BufferedReader(new InputStreamReader(System.in, StandardCharsets.UTF_8));
-    String line;
-    while ((line = reader.readLine()) != null) {
-      try {
-        if (line.startsWith("REPORT ")) {
-          String reporter = decodePayload(line.substring("REPORT ".length()));
-          Object value = workspace.report(reporter);
-          System.out.println(REPORT + encodePayload(String.valueOf(value)));
-        } else if (line.startsWith("EXPORT_VIEW ")) {
-          String path = decodePayload(line.substring("EXPORT_VIEW ".length()));
-          byte[] bytes = exportView(workspace, path);
-          System.out.println(VIEW + Base64.getEncoder().encodeToString(bytes));
-        } else if (line.startsWith("EXPORT_PLOT ")) {
-          String[] parts = line.substring("EXPORT_PLOT ".length()).split(" ", 2);
-          if (parts.length != 2) {
-            throw new IllegalArgumentException("EXPORT_PLOT requires plot name and path payloads");
+    // Mouse input must remain live while a model is executing, including a
+    // model waiting in `while [mouse-down?]`. Commands/exports remain serial.
+    ExecutorService commands = Executors.newSingleThreadExecutor();
+    try {
+      String line;
+      while ((line = reader.readLine()) != null) {
+        if (line.startsWith("MOUSE ")) {
+          try {
+            if (mouse == null) throw new IllegalStateException("Mouse input is only available in the 2D view.");
+            mouse.update(line.substring(6));
+          } catch (Exception error) {
+            if (mouse != null) mouse.update("0 0 0 0");
+            System.out.println("__NETLOGO_MOUSE_ERROR__" + encodePayload(error.getMessage()));
+            System.out.flush();
           }
-          String plotName = decodePayload(parts[0]);
-          String path = decodePayload(parts[1]);
-          byte[] bytes = exportPlot(workspace, plotName, path);
-          System.out.println(PLOT + Base64.getEncoder().encodeToString(bytes));
-        } else if (line.startsWith("EXPORT_PLOT_BINARY ")) {
-          String[] parts = line.substring("EXPORT_PLOT_BINARY ".length()).split(" ", 2);
-          if (parts.length != 2) {
-            throw new IllegalArgumentException("EXPORT_PLOT_BINARY requires plot name and path payloads");
-          }
-          exportPlotBinary(workspace, decodePayload(parts[0]), decodePayload(parts[1]));
-          System.out.println(OK);
-        } else if (line.startsWith("EXPORT_REPORT ")) {
-          String[] parts = line.substring("EXPORT_REPORT ".length()).split(" ", 2);
-          if (parts.length != 2) {
-            throw new IllegalArgumentException("EXPORT_REPORT requires reporter and path payloads");
-          }
-          String reporter = decodePayload(parts[0]);
-          String path = decodePayload(parts[1]);
-          exportReport(workspace, reporter, path);
-          System.out.println(OK);
-        } else if ("DRAWING_3D".equals(line)) {
-          System.out.println(DRAWING_3D + encodePayload(exportDrawing3D(workspace)));
-        } else if (line.startsWith("EXPORT_VIEW_3D ")) {
-          String path = decodePayload(line.substring("EXPORT_VIEW_3D ".length()));
-          exportView3D(workspace, path);
-          System.out.println(OK);
-        } else if (line.startsWith("EXPORT_DRAWING_3D_BINARY ")) {
-          String path = decodePayload(line.substring("EXPORT_DRAWING_3D_BINARY ".length()));
-          exportDrawing3DBinary(workspace, path);
-          System.out.println(OK);
-        } else if (line.startsWith("EXPORT_DRAWING_3D ")) {
-          String[] parts = line.substring("EXPORT_DRAWING_3D ".length()).split(" ", 2);
-          String path = decodePayload(parts[0]);
-          int maxLines = parts.length > 1 ? parsePositiveInt(parts[1], Integer.MAX_VALUE) : Integer.MAX_VALUE;
-          exportDrawing3D(workspace, path, maxLines);
-          System.out.println(OK);
         } else {
-          String command = line.startsWith("COMMAND ")
-            ? decodePayload(line.substring("COMMAND ".length()))
-            : decodePayload(line);
-          workspace.command(command);
-          System.out.println(OK);
+          final String request = line;
+          commands.submit(() -> runSessionLine(workspace, request));
         }
-      } catch (Throwable error) {
-        System.out.println(ERROR + encodeStackTrace(error));
       }
-      System.out.flush();
+    } finally {
+      if (mouse != null) mouse.update("0 0 0 0");
+      commands.shutdown();
+      commands.awaitTermination(Long.MAX_VALUE, TimeUnit.NANOSECONDS);
     }
+  }
+
+  private static void runSessionLine(HeadlessWorkspace workspace, String line) {
+    try {
+      if (line.startsWith("REPORT ")) {
+        String reporter = decodePayload(line.substring("REPORT ".length()));
+        Object value = workspace.report(reporter);
+        System.out.println(REPORT + encodePayload(String.valueOf(value)));
+      } else if (line.startsWith("EXPORT_VIEW ")) {
+        String path = decodePayload(line.substring("EXPORT_VIEW ".length()));
+        byte[] bytes = exportView(workspace, path);
+        System.out.println(VIEW + Base64.getEncoder().encodeToString(bytes));
+      } else if (line.startsWith("EXPORT_PLOT ")) {
+        String[] parts = line.substring("EXPORT_PLOT ".length()).split(" ", 2);
+        if (parts.length != 2) {
+          throw new IllegalArgumentException("EXPORT_PLOT requires plot name and path payloads");
+        }
+        String plotName = decodePayload(parts[0]);
+        String path = decodePayload(parts[1]);
+        byte[] bytes = exportPlot(workspace, plotName, path);
+        System.out.println(PLOT + Base64.getEncoder().encodeToString(bytes));
+      } else if (line.startsWith("EXPORT_PLOT_BINARY ")) {
+        String[] parts = line.substring("EXPORT_PLOT_BINARY ".length()).split(" ", 2);
+        if (parts.length != 2) {
+          throw new IllegalArgumentException("EXPORT_PLOT_BINARY requires plot name and path payloads");
+        }
+        exportPlotBinary(workspace, decodePayload(parts[0]), decodePayload(parts[1]));
+        System.out.println(OK);
+      } else if (line.startsWith("EXPORT_REPORT ")) {
+        String[] parts = line.substring("EXPORT_REPORT ".length()).split(" ", 2);
+        if (parts.length != 2) {
+          throw new IllegalArgumentException("EXPORT_REPORT requires reporter and path payloads");
+        }
+        String reporter = decodePayload(parts[0]);
+        String path = decodePayload(parts[1]);
+        exportReport(workspace, reporter, path);
+        System.out.println(OK);
+      } else if ("DRAWING_3D".equals(line)) {
+        System.out.println(DRAWING_3D + encodePayload(exportDrawing3D(workspace)));
+      } else if (line.startsWith("EXPORT_VIEW_3D ")) {
+        String path = decodePayload(line.substring("EXPORT_VIEW_3D ".length()));
+        exportView3D(workspace, path);
+        System.out.println(OK);
+      } else if (line.startsWith("EXPORT_DRAWING_3D_BINARY ")) {
+        String path = decodePayload(line.substring("EXPORT_DRAWING_3D_BINARY ".length()));
+        exportDrawing3DBinary(workspace, path);
+        System.out.println(OK);
+      } else if (line.startsWith("EXPORT_DRAWING_3D ")) {
+        String[] parts = line.substring("EXPORT_DRAWING_3D ".length()).split(" ", 2);
+        String path = decodePayload(parts[0]);
+        int maxLines = parts.length > 1 ? parsePositiveInt(parts[1], Integer.MAX_VALUE) : Integer.MAX_VALUE;
+        exportDrawing3D(workspace, path, maxLines);
+        System.out.println(OK);
+      } else {
+        String command = line.startsWith("COMMAND ")
+          ? decodePayload(line.substring("COMMAND ".length()))
+          : decodePayload(line);
+        workspace.command(command);
+        System.out.println(OK);
+      }
+    } catch (Throwable error) {
+      System.out.println(ERROR + encodeStackTrace(error));
+    }
+    System.out.flush();
   }
 
   private static String encodeStackTrace(Throwable error) {
@@ -248,6 +277,8 @@ public final class NetLogoCommandBridge {
   }
 
   private static byte[] exportView(HeadlessWorkspace workspace, String path) throws Throwable {
+    ViewMouse mouse = ViewMouse.get(workspace);
+    if (mouse != null) mouse.refresh();
     Path exportPath = Paths.get(path);
     try {
       try {

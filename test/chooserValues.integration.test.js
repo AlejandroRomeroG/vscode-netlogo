@@ -1,5 +1,6 @@
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
+const { bridgeSourcePaths } = require("../out/javaBridge");
 const os = require("node:os");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
@@ -19,7 +20,7 @@ test("NetLogo accepts imported, edited and reopened chooser values with their ex
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), "netlogo-chooser-integration-"));
   try {
     const compile = spawnSync("javac", ["-cp", installation.classPath.join(path.delimiter), "-d", temp,
-      path.join(root, "resources/java/NetLogoCommandBridge.java")], { encoding: "utf8", timeout: 30000 });
+      ...bridgeSourcePaths(path.join(root, "resources/java"))], { encoding: "utf8", timeout: 30000 });
     assert.equal(compile.status, 0, compile.error?.message || compile.stderr);
     function run(file, commands) {
       const result = spawnSync("java", [...installation.jvmArgs, "-Djava.awt.headless=true", "-cp",

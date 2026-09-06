@@ -10,6 +10,7 @@ const {
 } = require("../out/netlogoInstallation");
 const { parsePlotCsv } = require("../out/plotCsv");
 const { parseView3DBinary } = require("../out/view3D");
+const { bridgeSourcePaths } = require("../out/javaBridge");
 
 const root = path.join(__dirname, "..");
 const configuredHome = process.env.NETLOGO_HOME;
@@ -24,7 +25,7 @@ test("Java bridge runs the sample model against a real NetLogo installation", {
   try {
     const classPath = detectedInstallation.classPath.join(path.delimiter);
     const bridgePath = path.join(root, "resources", "java", "NetLogoCommandBridge.java");
-    const compile = spawnSync("javac", ["-cp", classPath, "-d", classesDir, bridgePath], {
+    const compile = spawnSync("javac", ["-cp", classPath, "-d", classesDir, ...bridgeSourcePaths(path.dirname(bridgePath))], {
       encoding: "utf8"
     });
     assert.equal(compile.status, 0, compile.stderr || compile.stdout);
@@ -70,7 +71,7 @@ test("Java bridge opens classic models whose section delimiter is attached to Co
   try {
     const classPath = detectedInstallation.classPath.join(path.delimiter);
     const bridgePath = path.join(root, "resources", "java", "NetLogoCommandBridge.java");
-    const compile = spawnSync("javac", ["-cp", classPath, "-d", classesDir, bridgePath], {
+    const compile = spawnSync("javac", ["-cp", classPath, "-d", classesDir, ...bridgeSourcePaths(path.dirname(bridgePath))], {
       encoding: "utf8"
     });
     assert.equal(compile.status, 0, compile.stderr || compile.stdout);
@@ -115,7 +116,7 @@ test("Java bridge runs turtle-context model commands used by Termites", {
   try {
     const classPath = detectedInstallation.classPath.join(path.delimiter);
     const bridgePath = path.join(root, "resources", "java", "NetLogoCommandBridge.java");
-    const compile = spawnSync("javac", ["-cp", classPath, "-d", classesDir, bridgePath], {
+    const compile = spawnSync("javac", ["-cp", classPath, "-d", classesDir, ...bridgeSourcePaths(path.dirname(bridgePath))], {
       encoding: "utf8"
     });
     assert.equal(compile.status, 0, compile.stderr || compile.stdout);
@@ -158,7 +159,7 @@ test("Java bridge exports every Rabbits Grass Weeds plot pen with native metadat
   try {
     const classPath = detectedInstallation.classPath.join(path.delimiter);
     const bridgePath = path.join(root, "resources", "java", "NetLogoCommandBridge.java");
-    const compile = spawnSync("javac", ["-cp", classPath, "-d", classesDir, bridgePath], {
+    const compile = spawnSync("javac", ["-cp", classPath, "-d", classesDir, ...bridgeSourcePaths(path.dirname(bridgePath))], {
       encoding: "utf8"
     });
     assert.equal(compile.status, 0, compile.stderr || compile.stdout);
@@ -213,7 +214,7 @@ test("Java bridge runs 3D models with a 3D workspace", {
   try {
     const classPath = detectedInstallation.classPath.join(path.delimiter);
     const bridgePath = path.join(root, "resources", "java", "NetLogoCommandBridge.java");
-    const compile = spawnSync("javac", ["-cp", classPath, "-d", classesDir, bridgePath], {
+    const compile = spawnSync("javac", ["-cp", classPath, "-d", classesDir, ...bridgeSourcePaths(path.dirname(bridgePath))], {
       encoding: "utf8"
     });
     assert.equal(compile.status, 0, compile.stderr || compile.stdout);
@@ -275,7 +276,7 @@ test("Java bridge exports every Tree Simple 3D trail in compact binary form", {
   try {
     const classPath = detectedInstallation.classPath.join(path.delimiter);
     const bridgePath = path.join(root, "resources", "java", "NetLogoCommandBridge.java");
-    const compile = spawnSync("javac", ["-cp", classPath, "-d", classesDir, bridgePath], {
+    const compile = spawnSync("javac", ["-cp", classPath, "-d", classesDir, ...bridgeSourcePaths(path.dirname(bridgePath))], {
       encoding: "utf8"
     });
     assert.equal(compile.status, 0, compile.stderr || compile.stdout);
@@ -333,7 +334,7 @@ test("native 3D snapshots export all Percolation patches without changing the si
   const classesDir = fs.mkdtempSync(path.join(os.tmpdir(), "netlogo-percolation-snapshot-"));
   try {
     const classPath = detectedInstallation.classPath.join(path.delimiter);
-    const compile = spawnSync("javac", ["-cp", classPath, "-d", classesDir, path.join(root, "resources", "java", "NetLogoCommandBridge.java")], { encoding: "utf8" });
+    const compile = spawnSync("javac", ["-cp", classPath, "-d", classesDir, ...bridgeSourcePaths(path.join(root, "resources", "java"))], { encoding: "utf8" });
     assert.equal(compile.status, 0, compile.stderr);
     const input = [
       commandLine("COMMAND", "random-seed 42 setup repeat 40 [ go ]"),

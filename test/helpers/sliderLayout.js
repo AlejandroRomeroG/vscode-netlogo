@@ -17,7 +17,7 @@ function sliderLayoutSource() {
       fragment("function renderWidgetContent(", "function renderViewBody("),
       fragment("function renderRuntimeSlider(", "function wireRuntimeControl("),
       fragment("function wireRuntimeControl(", "function monitorValueElement("),
-      fragment("function displayName(", "function viewWorldLabel("),
+      fragment("function displayName(", "function selectedChoice("),
       fragment("function node(", "function setInputValue(")
     ].join("\n")
   };

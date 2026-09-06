@@ -52,6 +52,8 @@ const netlogoInstallation_1 = require("./netlogoInstallation");
 const modelFormat_1 = require("./modelFormat");
 const plotSnapshot_1 = require("./plotSnapshot");
 const view3D_1 = require("./view3D");
+const javaBridge_1 = require("./javaBridge");
+const viewMouse_1 = require("./viewMouse");
 const DEFAULT_COMMAND_TIMEOUT_MS = 60000;
 const DRAWING_3D_RENDER_LIMIT = 160000;
 function formatNetLogoErrorMessage(error) {
@@ -195,6 +197,14 @@ class NetLogoRunner {
             }
         }
     }
+    updateViewMouse(resource, state) {
+        if (resource.scheme !== "file" || !(0, viewMouse_1.isViewMouseState)(state))
+            return;
+        for (const session of this.sessions.values()) {
+            if (session.matchesModelPath(resource.fsPath))
+                session.updateViewMouse(state);
+        }
+    }
     async resolveResource(resource) {
         if (resource instanceof vscode.Uri) {
             return resource;
@@ -216,15 +226,17 @@ class NetLogoRunner {
     async ensureBridgeCompiled(javacPath, classPath, verboseOutput, commandTimeoutMs) {
         const storageDir = this.context.globalStorageUri.fsPath;
         const classesDir = path.join(storageDir, "netlogo-bridge");
-        const sourcePath = vscode.Uri.joinPath(this.context.extensionUri, "resources", "java", "NetLogoCommandBridge.java").fsPath;
-        const classFile = path.join(classesDir, "NetLogoCommandBridge.class");
+        const sourceDir = vscode.Uri.joinPath(this.context.extensionUri, "resources", "java").fsPath;
+        const sourcePaths = (0, javaBridge_1.bridgeSourcePaths)(sourceDir);
+        const classFiles = sourcePaths.map(source => path.join(classesDir, path.relative(sourceDir, source).replace(/\.java$/, ".class")));
         const hashFile = path.join(classesDir, "NetLogoCommandBridge.sha256");
-        const sourceHash = fileSha256(sourcePath);
+        const sourceHash = (0, crypto_1.createHash)("sha256").update(sourcePaths.map(fileSha256).join(":"))
+            .update(classPath.join(path.delimiter)).digest("hex");
         fs.mkdirSync(classesDir, { recursive: true });
-        if (isFresh(classFile, sourcePath) && readTextFile(hashFile) === sourceHash) {
+        if (sourcePaths.every((source, index) => isFresh(classFiles[index], source)) && readTextFile(hashFile) === sourceHash) {
             return classesDir;
         }
-        await this.spawnLogged(javacPath, ["-cp", classPath.join(path.delimiter), "-d", classesDir, sourcePath], verboseOutput, commandTimeoutMs);
+        await this.spawnLogged(javacPath, ["-cp", classPath.join(path.delimiter), "-d", classesDir, ...sourcePaths], verboseOutput, commandTimeoutMs);
         fs.writeFileSync(hashFile, sourceHash, "utf8");
         return classesDir;
     }
@@ -468,6 +480,18 @@ class NetLogoSession {
     }
     setVerboseOutput(verboseOutput) {
         this.verboseOutput = verboseOutput;
+    }
+    updateViewMouse(state) {
+        if (this.isDisposed || this.isThreeDModel)
+            return;
+        // Independent of commandChain: a model may be waiting for mouse release
+        // inside the currently running command. The bridge input reader stays live.
+        this.child.stdin.write(`MOUSE ${state.inside ? 1 : 0} ${state.down ? 1 : 0} ${state.u} ${state.v}\n`, "utf8", error => {
+            if (error && !this.isDisposed) {
+                this.output.appendLine(`NetLogo mouse input failed: ${error.message}`);
+                this.dispose();
+            }
+        });
     }
     matchesModelPath(candidatePath) {
         return path.resolve(candidatePath) === path.resolve(this.modelPath);
@@ -729,6 +753,10 @@ class NetLogoSession {
             const value = Buffer.from(encoded, "base64").toString("utf8");
             this.resolvePending(value);
             this.logVerbose("3D drawing exported.");
+            return;
+        }
+        if (line.startsWith("__NETLOGO_MOUSE_ERROR__")) {
+            this.output.appendLine(`NetLogo mouse input failed: ${Buffer.from(line.slice("__NETLOGO_MOUSE_ERROR__".length), "base64").toString("utf8")}`);
             return;
         }
         if (line.startsWith(NetLogoSession.errorMarker)) {

@@ -98,7 +98,13 @@ test("Java command bridge compiles against the expected HeadlessWorkspace API", 
     fs.writeFileSync(penStatePath, "package org.nlogo.core; public interface PlotPenState { boolean isDown(); int mode(); double interval(); int color(); double x(); boolean hidden(); }");
 
     const bridgePath = path.resolve(__dirname, "..", "resources", "java", "NetLogoCommandBridge.java");
-    const result = spawnSync("javac", ["-d", classesDir, stubPath, path.join(apiDir, "Drawing3D.java"), path.join(apiDir, "DrawingLine3D.java"), path.join(apiDir, "Color.java"), ...apiPaths, turtlePath, sequencePath, iteratorPath, penStatePath, bridgePath], {
+    const mouseDir = path.join(tempDir, "local", "netlogo");
+    fs.mkdirSync(mouseDir, { recursive: true });
+    const mousePath = path.join(mouseDir, "ViewMouse.java");
+    // Native integration tests compile the real input adapter and reporters;
+    // this test isolates the main bridge's HeadlessWorkspace API surface.
+    fs.writeFileSync(mousePath, 'package local.netlogo; public class ViewMouse { public ViewMouse(Object workspace) {} public static ViewMouse get(Object workspace) { return null; } public void update(String input) {} public void refresh() {} }');
+    const result = spawnSync("javac", ["-d", classesDir, stubPath, mousePath, path.join(apiDir, "Drawing3D.java"), path.join(apiDir, "DrawingLine3D.java"), path.join(apiDir, "Color.java"), ...apiPaths, turtlePath, sequencePath, iteratorPath, penStatePath, bridgePath], {
       encoding: "utf8"
     });
 

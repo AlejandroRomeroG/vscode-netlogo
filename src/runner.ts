@@ -16,6 +16,8 @@ import { parseNetLogoModel } from "./modelFormat";
 import type { ParsedPlotCsv } from "./plotCsv";
 import { parsePlotBinary } from "./plotSnapshot";
 import { parseView3DBinary } from "./view3D";
+import { bridgeSourcePaths } from "./javaBridge";
+import { isViewMouseState, type ViewMouseState } from "./viewMouse";
 
 export interface NetLogoRunResult {
   readonly command: string;
@@ -309,6 +311,13 @@ export class NetLogoRunner implements vscode.Disposable {
     }
   }
 
+  public updateViewMouse(resource: vscode.Uri, state: ViewMouseState): void {
+    if (resource.scheme !== "file" || !isViewMouseState(state)) return;
+    for (const session of this.sessions.values()) {
+      if (session.matchesModelPath(resource.fsPath)) session.updateViewMouse(state);
+    }
+  }
+
   private async resolveResource(resource: vscode.Uri | undefined): Promise<vscode.Uri | undefined> {
     if (resource instanceof vscode.Uri) {
       return resource;
@@ -339,18 +348,20 @@ export class NetLogoRunner implements vscode.Disposable {
   ): Promise<string> {
     const storageDir = this.context.globalStorageUri.fsPath;
     const classesDir = path.join(storageDir, "netlogo-bridge");
-    const sourcePath = vscode.Uri.joinPath(this.context.extensionUri, "resources", "java", "NetLogoCommandBridge.java").fsPath;
-    const classFile = path.join(classesDir, "NetLogoCommandBridge.class");
+    const sourceDir = vscode.Uri.joinPath(this.context.extensionUri, "resources", "java").fsPath;
+    const sourcePaths = bridgeSourcePaths(sourceDir);
+    const classFiles = sourcePaths.map(source => path.join(classesDir, path.relative(sourceDir, source).replace(/\.java$/, ".class")));
     const hashFile = path.join(classesDir, "NetLogoCommandBridge.sha256");
-    const sourceHash = fileSha256(sourcePath);
+    const sourceHash = createHash("sha256").update(sourcePaths.map(fileSha256).join(":"))
+      .update(classPath.join(path.delimiter)).digest("hex");
 
     fs.mkdirSync(classesDir, { recursive: true });
 
-    if (isFresh(classFile, sourcePath) && readTextFile(hashFile) === sourceHash) {
+    if (sourcePaths.every((source, index) => isFresh(classFiles[index], source)) && readTextFile(hashFile) === sourceHash) {
       return classesDir;
     }
 
-    await this.spawnLogged(javacPath, ["-cp", classPath.join(path.delimiter), "-d", classesDir, sourcePath], verboseOutput, commandTimeoutMs);
+    await this.spawnLogged(javacPath, ["-cp", classPath.join(path.delimiter), "-d", classesDir, ...sourcePaths], verboseOutput, commandTimeoutMs);
     fs.writeFileSync(hashFile, sourceHash, "utf8");
     return classesDir;
   }
@@ -637,6 +648,18 @@ class NetLogoSession implements vscode.Disposable {
 
   public setVerboseOutput(verboseOutput: boolean): void {
     this.verboseOutput = verboseOutput;
+  }
+
+  public updateViewMouse(state: ViewMouseState): void {
+    if (this.isDisposed || this.isThreeDModel) return;
+    // Independent of commandChain: a model may be waiting for mouse release
+    // inside the currently running command. The bridge input reader stays live.
+    this.child.stdin.write(`MOUSE ${state.inside ? 1 : 0} ${state.down ? 1 : 0} ${state.u} ${state.v}\n`, "utf8", error => {
+      if (error && !this.isDisposed) {
+        this.output.appendLine(`NetLogo mouse input failed: ${error.message}`);
+        this.dispose();
+      }
+    });
   }
 
   public matchesModelPath(candidatePath: string): boolean {
@@ -944,6 +967,11 @@ class NetLogoSession implements vscode.Disposable {
       const value = Buffer.from(encoded, "base64").toString("utf8");
       this.resolvePending(value);
       this.logVerbose("3D drawing exported.");
+      return;
+    }
+
+    if (line.startsWith("__NETLOGO_MOUSE_ERROR__")) {
+      this.output.appendLine(`NetLogo mouse input failed: ${Buffer.from(line.slice("__NETLOGO_MOUSE_ERROR__".length), "base64").toString("utf8")}`);
       return;
     }
 

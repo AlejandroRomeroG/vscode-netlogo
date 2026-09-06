@@ -1,5 +1,6 @@
 // Compare equivalent, uncapped patch exports using NetLogo 6.4 and a fixed seed.
 const fs = require("node:fs");
+const { bridgeSourcePaths } = require("../out/javaBridge");
 const os = require("node:os");
 const path = require("node:path");
 const readline = require("node:readline");
@@ -14,7 +15,8 @@ async function main() {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "netlogo-3d-benchmark-"));
   const classPath = installation.classPath.join(path.delimiter);
   const bridgeSource = process.env.BENCHMARK_BRIDGE_SOURCE || path.join(__dirname, "../resources/java/NetLogoCommandBridge.java");
-  const compile = spawnSync("javac", ["-cp", classPath, "-d", directory, bridgeSource], { encoding: "utf8" });
+  const sources = process.env.BENCHMARK_BRIDGE_SOURCE ? [bridgeSource] : bridgeSourcePaths(path.dirname(bridgeSource));
+  const compile = spawnSync("javac", ["-cp", classPath, "-d", directory, ...sources], { encoding: "utf8" });
   if (compile.status !== 0) throw new Error(compile.stderr);
   const child = spawn("java", [...installation.jvmArgs, "-cp", [directory, classPath].join(path.delimiter), "NetLogoCommandBridge", "--3d",
     path.join(installation.home, "models/3D/Sample Models/Percolation 3D.nlogo3d")]);
